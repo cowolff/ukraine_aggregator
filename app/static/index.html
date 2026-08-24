@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<title>Ukraine Frontline Aggregator</title>
+<meta name="description" content="Live frontline, grey zone and geolocated war reporting from
+  Ukrainian, Russian, Western and neutral sources — every item labelled with its perspective.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='16' fill='%230057B7'/><rect y='16' width='32' height='16' fill='%23FFD700'/></svg>">
+<link rel="stylesheet" href="/static/vendor/maplibre-gl.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="notifications" class="notifications" hidden></div>
+
+<header class="topbar">
+  <div class="brand"><span class="flag" aria-hidden="true"></span> Frontline Aggregator</div>
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-map" class="tab active" aria-selected="true" aria-controls="view-map">Map</button>
+    <button role="tab" id="tab-feed" class="tab" aria-selected="false" aria-controls="view-feed">Feed</button>
+  </div>
+  <div class="status" id="status" aria-live="polite"></div>
+</header>
+
+<main>
+  <section id="view-map" class="view active" role="tabpanel" aria-labelledby="tab-map">
+    <div id="map"></div>
+
+    <div class="left-rail">
+    <aside class="panel filters" id="filters">
+      <button class="panel-toggle" id="filters-toggle" aria-expanded="true">Filters</button>
+      <div class="panel-body" id="filters-body">
+        <fieldset>
+          <legend>Time range</legend>
+          <select id="range" aria-label="Time range">
+            <option value="24">Last 24 hours</option>
+            <option value="72" selected>Last 72 hours</option>
+            <option value="168">Last 7 days</option>
+          </select>
+        </fieldset>
+        <fieldset>
+          <legend>My list</legend>
+          <button type="button" id="saved-only" class="saved-toggle">☆ Saved (0)</button>
+          <p class="seg-help">Click ★ on a report to shortlist it. Stored only in this browser.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Colour by</legend>
+          <div class="segmented" role="radiogroup" aria-label="What the colours mean">
+            <button type="button" id="mode-perspective" role="radio" aria-checked="true"
+                    class="seg active">Perspective</button>
+            <button type="button" id="mode-beneficiary" role="radio" aria-checked="false"
+                    class="seg">Beneficiary</button>
+          </div>
+          <p class="seg-help" id="mode-help">Who is reporting it.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Perspective</legend>
+          <div id="perspective-filters" class="checkboxes"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Event type</legend>
+          <div id="type-filters" class="checkboxes"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Layers</legend>
+          <label class="check"><input type="checkbox" id="layer-ru" checked> Russian control</label>
+          <label class="check"><input type="checkbox" id="layer-grey" checked> Grey zone</label>
+        </fieldset>
+      </div>
+    </aside>
+
+    <aside class="panel legend" id="legend">
+      <button class="panel-toggle" id="legend-toggle" aria-expanded="true">Legend</button>
+      <div class="panel-body" id="legend-body">
+        <p class="legend-note" id="legend-intro">Colour = whose reporting it is. Glyph = what
+          happened. Both are also written out in every popup and tooltip, so colour is never the
+          only cue.</p>
+        <ul class="legend-list" id="legend-perspectives"></ul>
+        <ul class="legend-list legend-lean" id="legend-lean"></ul>
+        <ul class="legend-list" id="legend-types"></ul>
+        <ul class="legend-list">
+          <li><span class="swatch swatch-ru"></span> Russian-controlled area — its edge is the
+            frontline</li>
+          <li><span class="swatch swatch-ru"></span> A small isolated red circle is a
+            <em>confirmed change not yet on either mapping authority's map</em> — corroborated by
+            two perspectives, or by a geolocation that names a side. It disappears once
+            DeepStateMap or ISW publishes a map that includes it.</li>
+          <li><span class="swatch swatch-grey"></span> Grey zone — Ukrainian-OSINT and Western
+            assessments disagree here, or a reported change is still unconfirmed</li>
+        </ul>
+        <p class="legend-note">Faded icons are low-confidence extractions; they never count as
+          evidence for moving the line.</p>
+      </div>
+    </aside>
+    </div>
+
+    <div class="timebar" id="timebar" hidden>
+      <div class="timebar-row">
+        <button id="time-live" class="time-live" title="Return to the live map">● LIVE</button>
+        <button id="time-play" class="time-btn" title="Play forward" aria-label="Play">▶</button>
+        <button id="time-back" class="time-btn" title="Step back" aria-label="Step back">◀|</button>
+        <button id="time-fwd" class="time-btn" title="Step forward" aria-label="Step forward">|▶</button>
+        <div class="time-readout">
+          <strong id="time-label">—</strong>
+          <span id="time-sub" class="muted"></span>
+        </div>
+        <label class="time-step">
+          step
+          <select id="time-step">
+            <option value="1">1 hour</option>
+            <option value="6">6 hours</option>
+            <option value="24" selected>1 day</option>
+            <option value="168">1 week</option>
+          </select>
+        </label>
+      </div>
+      <div class="timebar-track">
+        <canvas id="time-histogram" height="26" aria-hidden="true"></canvas>
+        <input type="range" id="time-slider" min="0" max="1000" value="1000" step="1"
+               aria-label="Point in time shown on the map">
+      </div>
+      <div class="timebar-ends">
+        <span id="time-start"></span>
+        <span id="time-end"></span>
+      </div>
+    </div>
+
+    <div class="attrib" id="frontline-meta"></div>
+  </section>
+
+  <section id="view-feed" class="view" role="tabpanel" aria-labelledby="tab-feed" hidden>
+    <div class="feed-controls">
+      <input type="search" id="feed-q" placeholder="Search headlines…" aria-label="Search headlines">
+      <select id="feed-perspective" aria-label="Filter by perspective">
+        <option value="">All perspectives</option>
+      </select>
+      <button id="feed-saved-only" class="saved-toggle">☆ Saved</button>
+      <button id="feed-reload">Refresh</button>
+    </div>
+    <ol class="feed" id="feed"></ol>
+    <div class="feed-end" id="feed-end"></div>
+  </section>
+</main>
+
+<script src="/static/vendor/maplibre-gl.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
