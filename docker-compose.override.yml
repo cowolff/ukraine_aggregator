@@ -1,0 +1,13 @@
+# Local development only. Publishes the datastores to the host so tests, seeds and psql can
+# reach them; the base compose file keeps them on the internal network in production.
+# Delete or rename this file (or run `docker compose -f docker-compose.yml up`) when deploying.
+services:
+  postgis:
+    ports:
+      - "55432:5432"
+  redis:
+    ports:
+      - "56379:6379"
+  nginx:
+    ports:
+      - "8080:80"

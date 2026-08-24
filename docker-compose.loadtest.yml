@@ -1,0 +1,9 @@
+# Load-test overlay: raise or lower extraction/translation concurrency to probe the proxy.
+#   LLM_CONCURRENCY=8 docker compose -f docker-compose.yml -f docker-compose.override.yml \
+#                                    -f docker-compose.loadtest.yml up -d llmworker
+# The base compose already runs a dedicated llm worker at the measured optimum (4).
+services:
+  llmworker:
+    command: ["celery", "-A", "celery_worker.celery_app", "worker",
+              "--concurrency=${LLM_CONCURRENCY:-4}", "-Q", "llm", "--hostname=llm@%h",
+              "--loglevel=warning", "--without-gossip", "--without-mingle"]

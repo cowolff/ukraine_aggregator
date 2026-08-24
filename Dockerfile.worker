@@ -1,6 +1,20 @@
-FROM python:3.10-slim
-WORKDIR /worker
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+WORKDIR /srv
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgeos-c1v5 \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app ./app
 COPY celery_worker ./celery_worker
-CMD ["celery", "-A", "celery_worker.tasks", "worker", "--loglevel=info"]
+COPY migrations ./migrations
+COPY scripts ./scripts
+COPY alembic.ini ./
+COPY sources ./sources
+
+CMD ["celery", "-A", "celery_worker.celery_app", "worker", "--concurrency=2", "-Q", "default,llm", "--loglevel=info"]
