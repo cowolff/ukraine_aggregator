@@ -1,0 +1,22 @@
+{% extends "base.html" %}{% block title %}{{ 'Edit' if source else 'New' }} source{% endblock %}
+{% block body %}
+<h1>{{ 'Edit' if source else 'New' }} source{% if source %} — {{ source.name }}{% endif %}</h1>
+<div class="card">
+<form method="post">
+  {{ form.csrf_token }}
+  <label>{{ form.name.label.text }}</label>{{ form.name() }}
+  {% for e in form.name.errors %}<div class="flash error">{{ e }}</div>{% endfor %}
+  <label>{{ form.type.label.text }}</label>{{ form.type() }}
+  <label>{{ form.url.label.text }}</label>{{ form.url() }}
+  {% for e in form.url.errors %}<div class="flash error">{{ e }}</div>{% endfor %}
+  <label>{{ form.perspective.label.text }}</label>{{ form.perspective() }}
+  <label>{{ form.reliability_tier.label.text }}</label>{{ form.reliability_tier() }}
+  <label>{{ form.poll_interval_s.label.text }}</label>{{ form.poll_interval_s() }}
+  <label>{{ form.meta_json.label.text }} <span class="muted">— e.g. {"slug":"channelname"} for telegram, {"adapter":"deepstate"} for api</span></label>
+  {{ form.meta_json() }}
+  <label style="display:flex;gap:.4rem;align-items:center">{{ form.enabled() }} Enabled</label>
+  <p><button class="primary" type="submit">Save</button>
+     <a href="{{ url_for('admin.sources_list') }}">cancel</a></p>
+</form>
+</div>
+{% endblock %}

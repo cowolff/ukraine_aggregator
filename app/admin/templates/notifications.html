@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block title %}Notifications{% endblock %}
+{% block body %}
+<h1>Notifications</h1>
+<p><a href="{{ url_for('admin.notification_edit') }}"><button class="primary">+ New notification</button></a></p>
+<div class="scroll"><table>
+<tr><th>#</th><th>Title</th><th>Level</th><th>Active</th><th>Window</th><th></th></tr>
+{% for r in rows %}
+<tr><td class="muted">{{ r.id }}</td>
+  <td><a href="{{ url_for('admin.notification_edit', notification_id=r.id) }}">{{ r.title }}</a>
+      <br><span class="muted" style="font-size:11px">{{ (r.body or '')|truncate(90) }}</span></td>
+  <td><code>{{ r.level }}</code></td><td>{{ '✔' if r.active else '—' }}</td>
+  <td class="muted">{{ r.starts_at or '—' }} → {{ r.ends_at or '—' }}</td>
+  <td><form method="post" action="{{ url_for('admin.notification_delete', notification_id=r.id) }}"
+            class="inline" onsubmit="return confirm('Delete?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">del</button></form></td>
+</tr>
+{% else %}<tr><td colspan="6" class="muted">None yet.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

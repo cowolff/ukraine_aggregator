@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% block title %}Test fetch{% endblock %}
+{% block body %}
+<h1>Test fetch — {{ source.name }}</h1>
+<p class="muted"><code>{{ source.type }}</code> {{ source.url }}</p>
+{% if note %}<div class="flash warn">{{ note }}</div>{% endif %}
+{% if preview %}
+  {% for item in preview %}
+  <div class="card">
+    <strong>{{ item.title or '(no title)' }}</strong>
+    <p class="muted" style="font-size:12px">
+      {{ item.published_at or 'no timestamp' }} · external_id <code>{{ item.external_id or '—' }}</code>
+      {% if item.url %} · <a href="{{ item.url }}" target="_blank" rel="noopener">original ↗</a>{% endif %}
+    </p>
+    <div style="white-space:pre-wrap;font-size:13px">{{ (item.body or '')|truncate(600) }}</div>
+  </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No items parsed.</p>
+{% endif %}
+<p><a href="{{ url_for('admin.sources_list') }}">← back to sources</a></p>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block title %}Notification{% endblock %}
+{% block body %}
+<h1>{{ 'Edit' if row else 'New' }} notification</h1>
+<div class="card"><form method="post">
+  {{ form.csrf_token }}
+  <label>Title</label>{{ form.title() }}
+  <label>Body</label>{{ form.body() }}
+  <label>Level</label>{{ form.level() }}
+  <label>Starts at (UTC, optional)</label>{{ form.starts_at() }}
+  <label>Ends at (UTC, optional)</label>{{ form.ends_at() }}
+  <label style="display:flex;gap:.4rem;align-items:center">{{ form.active() }} Active</label>
+  <p><button class="primary">Save</button> <a href="{{ url_for('admin.notifications_list') }}">cancel</a></p>
+</form></div>
+{% endblock %}

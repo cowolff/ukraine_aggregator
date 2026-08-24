@@ -1,6 +1,23 @@
-FROM python:3.10-slim
-WORKDIR /app
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+WORKDIR /srv
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgeos-c1v5 curl \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
 COPY app ./app
-CMD ["gunicorn", "-b", "0.0.0.0:5001", "app:app"]
+COPY celery_worker ./celery_worker
+COPY migrations ./migrations
+COPY scripts ./scripts
+COPY alembic.ini ./
+COPY sources ./sources
+
+EXPOSE 5001
+# 2 gthread workers × 4 threads: I/O-bound JSON serving on 2 vCPU (PLAN §6).
+CMD ["gunicorn", "-w", "2", "-k", "gthread", "--threads", "4", "--timeout", "60", \
+     "--access-logfile", "-", "-b", "0.0.0.0:5001", "app:create_app()"]

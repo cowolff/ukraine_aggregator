@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% block title %}News &amp; events{% endblock %}
+{% block body %}
+<h1>News &amp; events</h1>
+<form class="filters" method="get">
+  <div><label>Search title/body</label><input name="q" value="{{ args.get('q','') }}"></div>
+  <div><label>LLM status</label><select name="llm_status"><option value="">any</option>
+    {% for s in ['pending','done','skipped','failed'] %}
+    <option value="{{ s }}" {{ 'selected' if args.get('llm_status')==s }}>{{ s }}</option>{% endfor %}</select></div>
+  <div><label>Source id</label><input name="source_id" value="{{ args.get('source_id','') }}"></div>
+  <button class="primary">Filter</button>
+</form>
+<div class="scroll"><table>
+<tr><th>#</th><th>Title</th><th>Source</th><th>Published</th><th>LLM</th><th>Events</th>
+  <th>Visible</th><th>Actions</th></tr>
+{% for r in rows %}
+<tr>
+  <td class="muted">{{ r.id }}</td>
+  <td><a href="{{ url_for('admin.news_detail', item_id=r.id) }}">{{ (r.title or '(untitled)')|truncate(90) }}</a></td>
+  <td>{{ r.source_name|truncate(28) }}<br><span class="pill p-{{ r.perspective }}">{{ r.perspective }}</span></td>
+  <td class="muted">{{ (r.published_at or r.fetched_at).strftime('%Y-%m-%d %H:%M') }}</td>
+  <td><code>{{ r.llm_status }}</code></td>
+  <td>{{ r.event_count }} <span class="muted">({{ r.placed_count }} placed)</span></td>
+  <td>{{ '✔' if r.visible else '—' }}</td>
+  <td>
+    <form method="post" action="{{ url_for('admin.news_toggle', item_id=r.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button>{{ 'hide' if r.visible else 'unhide' }}</button></form>
+    <form method="post" action="{{ url_for('admin.news_reextract', item_id=r.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>re-extract</button></form>
+    <form method="post" action="{{ url_for('admin.news_delete', item_id=r.id) }}" class="inline"
+          onsubmit="return confirm('Delete item {{ r.id }}?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">del</button></form>
+  </td>
+</tr>
+{% else %}<tr><td colspan="8" class="muted">Nothing ingested yet.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

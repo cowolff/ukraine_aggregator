@@ -1,0 +1,48 @@
+{% extends "base.html" %}{% block title %}News #{{ item.id }}{% endblock %}
+{% block body %}
+<h1>{{ item.title or '(untitled)' }}</h1>
+<p>
+  <span class="pill p-{{ item.source.perspective }}">{{ item.source.perspective }}</span>
+  <strong>{{ item.source.name }}</strong>
+  <span class="muted">· tier {{ item.source.reliability_tier }}
+  · {{ (item.published_at or item.fetched_at).strftime('%Y-%m-%d %H:%M UTC') }}
+  · llm <code>{{ item.llm_status }}</code> ({{ item.llm_attempts }} attempts)</span>
+  {% if item.url %} · <a href="{{ item.url }}" target="_blank" rel="noopener">original ↗</a>{% endif %}
+</p>
+<div class="card" style="white-space:pre-wrap">{{ item.body or '(no body)' }}</div>
+
+<p>
+  <form method="post" action="{{ url_for('admin.news_toggle', item_id=item.id) }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button>{{ 'hide from public' if item.visible else 'unhide' }}</button></form>
+  <form method="post" action="{{ url_for('admin.news_reextract', item_id=item.id) }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>re-run extraction</button></form>
+  <form method="post" action="{{ url_for('admin.news_delete', item_id=item.id) }}" class="inline"
+        onsubmit="return confirm('Delete this item and its events?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">delete item</button></form>
+</p>
+
+<h2>Extracted events ({{ item.events|length }})</h2>
+{% for e in item.events %}
+<div class="card">
+  <strong><code>{{ e.event_type }}</code></strong>
+  {% if e.claimed_by %}<span class="pill p-{{ 'russian' if e.claimed_by=='ru' else 'ukrainian' }}">claims {{ e.claimed_by }}</span>{% endif %}
+  <span class="muted">· confidence {{ '%.2f'|format(e.confidence) if e.confidence is not none else '—' }}
+    · place “{{ e.place_name_raw or '—' }}”
+    · {{ e.coord_source or 'unplaced' }}
+    {% if e.gazetteer_entry %} → {{ e.gazetteer_entry.name_uk }} ({{ e.gazetteer_entry.oblast }}){% endif %}
+    · visible {{ '✔' if e.visible else '—' }}</span>
+  <form method="post" action="{{ url_for('admin.event_relocate', event_id=e.id) }}"
+        style="display:flex;gap:.5rem;align-items:end;margin-top:.5rem;flex-wrap:wrap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label>Latitude</label><input name="lat" style="max-width:130px" placeholder="48.5"></div>
+    <div><label>Longitude</label><input name="lon" style="max-width:130px" placeholder="37.1"></div>
+    <button>move event</button>
+  </form>
+  <form method="post" action="{{ url_for('admin.event_toggle', event_id=e.id) }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button style="margin-top:.4rem">{{ 'hide event' if e.visible else 'unhide event' }}</button></form>
+</div>
+{% else %}<p class="muted">No events extracted from this item.</p>{% endfor %}
+<p><a href="{{ url_for('admin.news_list') }}">← back to news</a></p>
+{% endblock %}

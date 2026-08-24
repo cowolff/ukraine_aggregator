@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Admin login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;display:grid;place-items:center;min-height:100vh;background:#0f1216;color:#e6e9ee;
+ font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+form{background:#171b21;border:1px solid #2b323c;border-radius:10px;padding:1.5rem;width:300px}
+h1{font-size:16px;margin:0 0 1rem}
+label{display:block;margin:.6rem 0 .2rem;color:#94a0b0;font-size:12px}
+input{width:100%;padding:.45rem;border-radius:6px;border:1px solid #2b323c;background:#0f1216;color:#e6e9ee}
+button{margin-top:1rem;width:100%;padding:.5rem;border:0;border-radius:6px;background:#4c8dff;color:#fff;
+ font:inherit;cursor:pointer}
+.flash{color:#D52B1E;font-size:12px;margin-top:.6rem}
+</style></head><body>
+<form method="post">
+  {{ form.csrf_token }}
+  <h1>🇺🇦 Aggregator admin</h1>
+  <label>Username</label>{{ form.username(autofocus=true, autocomplete="username") }}
+  <label>Password</label>{{ form.password(autocomplete="current-password") }}
+  <button type="submit">Sign in</button>
+  {% for _c, m in get_flashed_messages(with_categories=true) %}<div class="flash">{{ m }}</div>{% endfor %}
+</form></body></html>

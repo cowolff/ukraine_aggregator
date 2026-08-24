@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% block title %}Claims{% endblock %}
+{% block body %}
+<h1>Claims review</h1>
+<p>
+  {% for s in ['pending','confirmed','reverted','rejected','all'] %}
+  <a href="{{ url_for('admin.claims_list', status=s) }}"><button {{ 'class=primary' if status==s }}>{{ s }}</button></a>
+  {% endfor %}
+</p>
+{% for c in claims %}
+<div class="card">
+  <strong>Claim #{{ c.id }}</strong>
+  <code>{{ c.direction }}</code> · status <strong>{{ c.status }}</strong>
+  <span class="muted">· opened {{ c.created_at.strftime('%Y-%m-%d %H:%M') }}
+    {% if c.resolved_by %}· resolved by <code>{{ c.resolved_by }}</code>{% endif %}
+    {% if coords.get(c.id) %}· {{ '%.4f'|format(coords[c.id][0]) }}, {{ '%.4f'|format(coords[c.id][1]) }}{% endif %}
+    {% if c.gazetteer_entry %}· {{ c.gazetteer_entry.name_uk }} ({{ c.gazetteer_entry.oblast }}){% endif %}
+  </span>
+  <ul class="evidence">
+  {% for e in chains[c.id] %}
+    <li class="{{ '' if e.active else 'inactive' }}">
+      <span class="pill p-{{ e.perspective }}">{{ e.perspective }}</span>
+      <strong>{{ e.source_name }}</strong> (tier {{ e.reliability_tier }})
+      · role <code>{{ e.role }}</code>
+      · conf {{ '%.2f'|format(e.confidence) if e.confidence is not none else '—' }}
+      · {{ e.published_at or '—' }}
+      {% if e.url %}<a href="{{ e.url }}" target="_blank" rel="noopener">source ↗</a>{% endif %}
+      <form method="post" class="inline"
+            action="{{ url_for('admin.evidence_action', link_id=e.link_id, action='deactivate' if e.active else 'activate') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button>{{ 'deactivate' if e.active else 'reactivate' }}</button></form>
+    </li>
+  {% else %}<li class="muted">no evidence linked</li>{% endfor %}
+  </ul>
+  <p style="margin-top:.6rem">
+    {% for action, label in [('confirm','confirm'),('reject','reject'),('revert','revert'),('reopen','reopen as pending')] %}
+    <form method="post" action="{{ url_for('admin.claim_action', claim_id=c.id, action=action) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>{{ label }}</button></form>
+    {% endfor %}
+  </p>
+</div>
+{% else %}<p class="muted">No claims with status “{{ status }}”.</p>{% endfor %}
+{% endblock %}

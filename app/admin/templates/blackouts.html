@@ -1,0 +1,119 @@
+{% extends "base.html" %}{% block title %}Blackout zones{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/maplibre-gl.css') }}">
+<script src="{{ url_for('static', filename='vendor/maplibre-gl.js') }}"></script>
+<style>#draw{height:460px;border-radius:8px;border:1px solid var(--line)}
+.drawbar{display:flex;gap:.5rem;margin:.6rem 0;flex-wrap:wrap}</style>
+{% endblock %}
+{% block body %}
+<h1>Blackout zones</h1>
+<p class="muted">Publish-time masking only: ingestion keeps running, and deactivating a zone makes
+its history reappear on the public site.</p>
+
+<div class="card">
+  <div id="draw"></div>
+  <div class="drawbar">
+    <button type="button" id="btn-start">start drawing</button>
+    <button type="button" id="btn-undo">undo vertex</button>
+    <button type="button" id="btn-clear">clear</button>
+    <span class="muted" id="draw-hint">Click on the map to place polygon vertices (3 minimum).</span>
+  </div>
+  <form method="post" action="{{ url_for('admin.blackout_create') }}">
+    {{ form.csrf_token }}
+    <label>Name</label>{{ form.name() }}
+    <label>Reason</label>{{ form.reason() }}
+    <label>Polygon GeoJSON <span class="muted">(filled in by the map, editable)</span></label>
+    {{ form.geojson(id="geojson") }}
+    <label style="display:flex;gap:.4rem;align-items:center">{{ form.active() }} Active</label>
+    <p><button class="primary">Create zone</button></p>
+  </form>
+</div>
+
+<h2>Existing zones</h2>
+<div class="scroll"><table>
+<tr><th>#</th><th>Name</th><th>Reason</th><th>Active</th><th>Created</th><th></th></tr>
+{% for r in rows %}
+<tr><td class="muted">{{ r.id }}</td><td>{{ r.name }}</td><td class="muted">{{ (r.reason or '')|truncate(60) }}</td>
+  <td>{{ '✔' if r.active else '—' }}</td>
+  <td class="muted">{{ r.created_at.strftime('%Y-%m-%d') }} {{ r.created_by or '' }}</td>
+  <td>
+    <form method="post" action="{{ url_for('admin.blackout_toggle', zone_id=r.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button>{{ 'deactivate' if r.active else 'activate' }}</button></form>
+    <form method="post" action="{{ url_for('admin.blackout_delete', zone_id=r.id) }}" class="inline"
+          onsubmit="return confirm('Delete zone {{ r.id }}?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">del</button></form>
+  </td></tr>
+{% else %}<tr><td colspan="6" class="muted">No zones defined.</td></tr>{% endfor %}
+</table></div>
+
+<script>
+// Minimal polygon draw: click to add vertices, live preview, GeoJSON written into the form.
+// Deliberately hand-rolled instead of vendoring mapbox-gl-draw (see plans/DEVIATIONS.md).
+const existing = {{ rows | map(attribute='geojson') | list | tojson }};
+const map = new maplibregl.Map({
+  container: 'draw',
+  style: {
+    version: 8,
+    sources: {osm: {type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256, attribution: '© OpenStreetMap contributors'}},
+    layers: [{id: 'osm', type: 'raster', source: 'osm'}]
+  },
+  center: [31.0, 48.5], zoom: 5
+});
+let drawing = false, vertices = [];
+
+function fc(features) { return {type: 'FeatureCollection', features}; }
+function polyFeature(coords, closed) {
+  const ring = coords.slice();
+  if (closed && ring.length >= 3) ring.push(ring[0]);
+  return {type: 'Feature', properties: {}, geometry: {type: 'Polygon', coordinates: [ring]}};
+}
+function render() {
+  const feats = vertices.length >= 3 ? [polyFeature(vertices, true)] : [];
+  map.getSource('draft').setData(fc(feats));
+  map.getSource('draft-pts').setData(fc(vertices.map(c =>
+    ({type: 'Feature', properties: {}, geometry: {type: 'Point', coordinates: c}}))));
+  const out = document.getElementById('geojson');
+  out.value = vertices.length >= 3
+    ? JSON.stringify(polyFeature(vertices, true).geometry)
+    : '';
+  document.getElementById('draw-hint').textContent = drawing
+    ? `${vertices.length} vertices — click to add, “clear” to restart.`
+    : 'Click “start drawing”, then click the map to place vertices.';
+}
+
+map.on('load', () => {
+  map.addSource('zones', {type: 'geojson', data: fc(existing.filter(Boolean).map(g =>
+    ({type: 'Feature', properties: {}, geometry: JSON.parse(g)})))});
+  map.addLayer({id: 'zones-fill', type: 'fill', source: 'zones',
+    paint: {'fill-color': '#000', 'fill-opacity': 0.35}});
+  map.addLayer({id: 'zones-line', type: 'line', source: 'zones',
+    paint: {'line-color': '#888', 'line-width': 1.5, 'line-dasharray': [2, 2]}});
+
+  map.addSource('draft', {type: 'geojson', data: fc([])});
+  map.addLayer({id: 'draft-fill', type: 'fill', source: 'draft',
+    paint: {'fill-color': '#4c8dff', 'fill-opacity': 0.3}});
+  map.addLayer({id: 'draft-line', type: 'line', source: 'draft',
+    paint: {'line-color': '#4c8dff', 'line-width': 2}});
+  map.addSource('draft-pts', {type: 'geojson', data: fc([])});
+  map.addLayer({id: 'draft-pts', type: 'circle', source: 'draft-pts',
+    paint: {'circle-radius': 4, 'circle-color': '#fff', 'circle-stroke-color': '#4c8dff',
+            'circle-stroke-width': 2}});
+  render();
+});
+
+map.on('click', (e) => {
+  if (!drawing) return;
+  vertices.push([+e.lngLat.lng.toFixed(5), +e.lngLat.lat.toFixed(5)]);
+  render();
+});
+document.getElementById('btn-start').onclick = () => {
+  drawing = true; map.getCanvas().style.cursor = 'crosshair'; render();
+};
+document.getElementById('btn-undo').onclick = () => { vertices.pop(); render(); };
+document.getElementById('btn-clear').onclick = () => {
+  vertices = []; drawing = false; map.getCanvas().style.cursor = ''; render();
+};
+</script>
+{% endblock %}
