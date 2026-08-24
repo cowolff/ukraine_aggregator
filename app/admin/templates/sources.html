@@ -1,0 +1,47 @@
+{% extends "base.html" %}{% block title %}Sources{% endblock %}
+{% block body %}
+<h1>Sources</h1>
+<form class="filters" method="get">
+  <div><label>Search</label><input name="q" value="{{ q }}" placeholder="name or url"></div>
+  <div><label>Type</label><select name="type"><option value="">any</option>
+    {% for t in ['rss','telegram','api','scrape'] %}
+    <option value="{{ t }}" {{ 'selected' if args.get('type')==t }}>{{ t }}</option>{% endfor %}</select></div>
+  <div><label>Perspective</label><select name="perspective"><option value="">any</option>
+    {% for p in ['ukrainian','russian','western','neutral'] %}
+    <option value="{{ p }}" {{ 'selected' if args.get('perspective')==p }}>{{ p }}</option>{% endfor %}</select></div>
+  <div><label>Status</label><select name="status"><option value="">any</option>
+    {% for s in ['ok','degraded','dead'] %}
+    <option value="{{ s }}" {{ 'selected' if args.get('status')==s }}>{{ s }}</option>{% endfor %}</select></div>
+  <div><label>Enabled</label><select name="enabled"><option value="">any</option>
+    <option value="1" {{ 'selected' if args.get('enabled')=='1' }}>yes</option>
+    <option value="0" {{ 'selected' if args.get('enabled')=='0' }}>no</option></select></div>
+  <button class="primary">Filter</button>
+  <a href="{{ url_for('admin.source_edit') }}"><button type="button">+ New source</button></a>
+</form>
+
+<p class="muted">{{ sources|length }} shown (cap 500).</p>
+<div class="scroll"><table>
+<tr><th>Name</th><th>Type</th><th>Perspective</th><th>Tier</th><th>Interval</th><th>Enabled</th>
+  <th>Status</th><th>Fails</th><th>Actions</th></tr>
+{% for s in sources %}
+<tr>
+  <td><a href="{{ url_for('admin.source_edit', source_id=s.id) }}">{{ s.name }}</a><br>
+      <span class="muted" style="font-size:11px">{{ s.url|truncate(70) }}</span></td>
+  <td><code>{{ s.type }}</code></td>
+  <td><span class="pill p-{{ s.perspective }}">{{ s.perspective }}</span></td>
+  <td>{{ s.reliability_tier }}</td><td>{{ s.poll_interval_s }}s</td>
+  <td>{{ '✔' if s.enabled else '—' }}</td>
+  <td class="s-{{ s.status }}">{{ s.status }}</td><td>{{ s.consecutive_failures }}</td>
+  <td>
+    <form method="post" action="{{ url_for('admin.source_test', source_id=s.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>test fetch</button></form>
+    <form method="post" action="{{ url_for('admin.source_reset', source_id=s.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>reset</button></form>
+    <form method="post" action="{{ url_for('admin.source_delete', source_id=s.id) }}" class="inline"
+          onsubmit="return confirm('Delete or disable {{ s.name }}?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">del</button></form>
+  </td>
+</tr>
+{% else %}<tr><td colspan="9" class="muted">No sources match.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

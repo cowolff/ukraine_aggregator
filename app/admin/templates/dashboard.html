@@ -1,0 +1,61 @@
+{% extends "base.html" %}{% block title %}Dashboard{% endblock %}
+{% block body %}
+<h1>Dashboard</h1>
+{% set h = stats.health %}
+<div class="grid">
+  <div class="kpi"><b class="{{ 's-ok' if h.db=='ok' else 's-dead' }}">{{ h.db }}</b><span>Postgres</span></div>
+  <div class="kpi"><b class="{{ 's-ok' if h.redis=='ok' else 's-dead' }}">{{ h.redis }}</b><span>Redis</span></div>
+  <div class="kpi"><b>{{ h.pending_llm if h.pending_llm is not none else '—' }}</b><span>Items awaiting extraction</span></div>
+  <div class="kpi"><b>{{ h.degraded_sources if h.degraded_sources is not none else '—' }}</b><span>Degraded sources</span></div>
+  <div class="kpi"><b>{{ h.enabled_sources if h.enabled_sources is not none else '—' }}</b><span>Enabled sources</span></div>
+  <div class="kpi"><b>{{ '{:,}'.format(h.news_items) if h.news_items is not none else '—' }}</b><span>News items stored</span></div>
+  <div class="kpi"><b>{{ '{:,}'.format(h.gazetteer_entries) if h.gazetteer_entries is not none else '—' }}</b><span>Gazetteer places</span></div>
+  <div class="kpi"><b style="font-size:15px">{{ h.last_frontline_build_human or 'never' }}</b><span>Last frontline build</span></div>
+</div>
+
+<h2>Counters (since deploy)</h2>
+<div class="grid">
+  {% for name, value in stats.counters.items() %}
+    <div class="kpi"><b>{{ '{:,}'.format(value) }}</b><span>{{ name.replace('_',' ') }}</span></div>
+  {% endfor %}
+</div>
+
+<h2>Claims</h2>
+<div class="grid">
+  {% for status in ['pending','confirmed','reverted','rejected'] %}
+    <div class="kpi"><b>{{ stats.claim_status.get(status, 0) }}</b>
+      <span><a href="{{ url_for('admin.claims_list', status=status) }}">{{ status }}</a></span></div>
+  {% endfor %}
+</div>
+
+<h2>Poller health ({{ sources|length }} enabled)</h2>
+<div class="scroll"><table>
+<tr><th>Source</th><th>Type</th><th>Perspective</th><th>Status</th><th>Last success</th>
+  <th>Last poll</th><th>Fails</th><th></th></tr>
+{% for s in sources %}
+<tr>
+  <td><a href="{{ url_for('admin.source_edit', source_id=s.id) }}">{{ s.name }}</a></td>
+  <td><code>{{ s.type }}</code></td>
+  <td><span class="pill p-{{ s.perspective }}">{{ s.perspective }}</span></td>
+  <td class="s-{{ s.status }}">{{ s.status }}</td>
+  <td class="muted">{{ s.last_success_at.strftime('%Y-%m-%d %H:%M') if s.last_success_at else '—' }}</td>
+  <td class="muted">{{ s.last_polled_at.strftime('%Y-%m-%d %H:%M') if s.last_polled_at else '—' }}</td>
+  <td>{{ s.consecutive_failures }}</td>
+  <td>{% if s.consecutive_failures %}
+    <form method="post" action="{{ url_for('admin.source_reset', source_id=s.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>reset</button></form>
+  {% endif %}</td>
+</tr>
+{% else %}<tr><td colspan="8" class="muted">No sources enabled yet — enable some under Sources.</td></tr>
+{% endfor %}
+</table></div>
+
+<h2>Recent audit trail</h2>
+<div class="scroll"><table>
+<tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th></tr>
+{% for a in audit_entries %}
+<tr><td class="muted">{{ a.at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ a.actor }}</td>
+    <td><code>{{ a.action }}</code></td><td class="muted">{{ a.entity }}{% if a.entity_id %}#{{ a.entity_id }}{% endif %}</td></tr>
+{% else %}<tr><td colspan="4" class="muted">Nothing logged yet.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}
