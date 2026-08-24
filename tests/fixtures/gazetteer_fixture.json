@@ -1,0 +1,18 @@
+[
+  {"name_uk": "Часів Яр", "name_ru": "Часов Яр", "name_en": "Chasiv Yar", "oblast": "donetsk",
+   "raion": null, "lat": 48.5906, "lon": 37.8306, "population": 12000, "place": "town"},
+  {"name_uk": "Покровськ", "name_ru": "Покровск", "name_en": "Pokrovsk", "oblast": "donetsk",
+   "raion": null, "lat": 48.2789, "lon": 37.1761, "population": 60000, "place": "city"},
+  {"name_uk": "Новоселівка", "name_ru": "Новоселовка", "name_en": "Novoselivka", "oblast": "donetsk",
+   "raion": null, "lat": 48.4500, "lon": 37.5000, "population": 800, "place": "village"},
+  {"name_uk": "Новоселівка", "name_ru": "Новоселовка", "name_en": "Novoselivka", "oblast": "sumy",
+   "raion": null, "lat": 51.0000, "lon": 34.2000, "population": 400, "place": "village"},
+  {"name_uk": "Куп'янськ", "name_ru": "Купянск", "name_en": "Kupiansk", "oblast": "kharkiv",
+   "raion": null, "lat": 49.7100, "lon": 37.6167, "population": 26000, "place": "city"},
+  {"name_uk": "Львів", "name_ru": "Львов", "name_en": "Lviv", "oblast": "lviv",
+   "raion": null, "lat": 49.8397, "lon": 24.0297, "population": 720000, "place": "city"},
+  {"name_uk": "Київ", "name_ru": "Киев", "name_en": "Kyiv", "oblast": "kyiv",
+   "raion": null, "lat": 50.4501, "lon": 30.5234, "population": 2900000, "place": "city"},
+  {"name_uk": "Бахмут", "name_ru": "Бахмут", "name_en": "Bakhmut", "oblast": "donetsk",
+   "raion": null, "lat": 48.5956, "lon": 38.0000, "population": 70000, "place": "city"}
+]

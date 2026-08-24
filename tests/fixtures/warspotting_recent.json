@@ -1,0 +1,76 @@
+{
+  "losses": [
+    {
+      "id": 46597,
+      "type": "Self-propelled artillery",
+      "model": "152mm 2S5 'Giatsint-S'",
+      "status": "Destroyed",
+      "lost_by": "Russia",
+      "date": "2026-08-21",
+      "nearest_location": "Nizhnemakhovo, Sudzha raion",
+      "geo": "51.112449,35.454304",
+      "unit": null,
+      "tags": "Cope cage"
+    },
+    {
+      "id": 46569,
+      "type": "Engineering",
+      "model": "'Zemledeliye' remote mine-laying system",
+      "status": "Destroyed",
+      "lost_by": "Russia",
+      "date": "2026-08-19",
+      "nearest_location": "Goncharovka, Sudzha raion",
+      "geo": "51.197134,35.263791",
+      "unit": "Moskva (ex-Western) Military District",
+      "tags": null
+    },
+    {
+      "id": 46568,
+      "type": "Rocket and missile artillery",
+      "model": "220mm 9P140 BM-27 (for 9K57 'Uragan')",
+      "status": "Destroyed",
+      "lost_by": "Russia",
+      "date": "2026-08-18",
+      "nearest_location": "Zapovitne, Vasylivka raion",
+      "geo": "47.362925,34.665322",
+      "unit": null,
+      "tags": null
+    },
+    {
+      "id": 46567,
+      "type": "Transport",
+      "model": "KamAZ 6x6",
+      "status": "Destroyed",
+      "lost_by": "Russia",
+      "date": "2026-08-18",
+      "nearest_location": "Luhanske, Bakhmut raion",
+      "geo": "48.434169,38.273900",
+      "unit": null,
+      "tags": "Loitering"
+    },
+    {
+      "id": 46630,
+      "type": "Transport",
+      "model": "KamAZ 6x6",
+      "status": "Destroyed",
+      "lost_by": "Russia",
+      "date": "2026-08-22",
+      "nearest_location": "Pokrovsk raion, Donetsk oblast",
+      "geo": null,
+      "unit": null,
+      "tags": "Cope cage, Jammer"
+    },
+    {
+      "id": 46629,
+      "type": "Anti-aircraft systems",
+      "model": "9A34M/35M TELAR (for 9K35 'Strela-10')",
+      "status": "Destroyed",
+      "lost_by": "Russia",
+      "date": "2026-08-22",
+      "nearest_location": "Belgorod oblast",
+      "geo": null,
+      "unit": null,
+      "tags": "◇, ✕, Additional armour"
+    }
+  ]
+}

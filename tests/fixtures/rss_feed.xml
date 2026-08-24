@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:foaf="http://xmlns.com/foaf/0.1/" xmlns:og="http://ogp.me/ns#" xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#" xmlns:schema="http://schema.org/" xmlns:sioc="http://rdfs.org/sioc/ns#" xmlns:sioct="http://rdfs.org/sioc/types#" xmlns:skos="http://www.w3.org/2004/02/skos/core#" xmlns:xsd="http://www.w3.org/2001/XMLSchema#" version="2.0" xml:base="https://www.osw.waw.pl/en">
+  <channel>
+    <title>osw.waw.pl</title>
+    <link>https://www.osw.waw.pl/en</link>
+    <description>OSW - the latest publications</description>
+    <language>en</language>
+    
+    <item>
+  <title>Ukraine: another corruption scandal within Zelensky’s inner circle</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-20/ukraine-another-corruption-scandal-within-zelenskys-inner-circle</link>
+  <description>On 19 August, the National Anti-Corruption Bureau of Ukraine (NABU) announced a special operation codenamed Forrest Gump, targeting a criminal organisation allegedly run by members of the Verkhovna Rada and officials from the Office of the President of Ukraine (OPU).</description>
+  <pubDate>Thu, 20 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Marcin Jędrysiak</dc:creator>
+    <guid isPermaLink="false">34256</guid>
+    </item>
+<item>
+  <title>Following Beijing’s lead, the Kremlin hardens its stance towards Tokyo</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-19/following-beijings-lead-kremlin-hardens-its-stance-towards-tokyo</link>
+  <description>In the first half of August, the Kremlin sent Tokyo a strong political signal regarding the dispute over the Southern Kuril Islands (Japan’s Northern Territories). Between 4 and 12 August, Russia’s Pacific Fleet conducted large-scale exercises involving more than 60 vessels, including live-fire drills in the disputed waters.</description>
+  <pubDate>Wed, 19 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Witold Rodkiewicz</dc:creator>
+    <guid isPermaLink="false">34255</guid>
+    </item>
+<item>
+  <title>A massive Ukrainian attack on Novorossiysk. Day 1637 of the war</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-18/a-massive-ukrainian-attack-novorossiysk-day-1637-war</link>
+  <description>&amp;nbsp;</description>
+  <pubDate>Tue, 18 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Andrzej Wilk, Sławomir Matuszak, Jacek Tarociński</dc:creator>
+    <guid isPermaLink="false">34251</guid>
+    </item>
+<item>
+  <title>The Ukrainian-Russian battle of the flags. The offensive that never was</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-18/ukrainian-russian-battle-flags-offensive-never-was</link>
+  <description>On 12 August, President Volodymyr Zelensky announced that Ukraine had recaptured 745 km² of territory and 26 settlements in a large-scale offensive operation conducted by the Air Assault Forces together with sub-units from other formations on the Oleksandrivka axis, at the junction of the Dnipropetrovsk, Donetsk and Zaporizhzhia oblasts. The operation unfolded in two phases: from January to May and from May to August.</description>
+  <pubDate>Tue, 18 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Andrzej Wilk</dc:creator>
+    <guid isPermaLink="false">34250</guid>
+    </item>
+<item>
+  <title>For and even against: 100 days of Radev’s government in Bulgaria</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-17/and-even-against-100-days-radevs-government-bulgaria</link>
+  <description>16 August marked 100 days since Rumen Radev’s government was sworn in. Despite its pre-election promises, the single-party cabinet of the conservative-social Progressive Bulgaria (PB) has so far taken few steps indicating a desire to pursue fundamental domestic reforms or swiftly hold previous governments to account. On the international stage, the prime minister has criticised the EU’s foreign policy mainstream but has refrained from blocking its decisions in order to preserve Bulgaria’s image as a constructive partner.</description>
+  <pubDate>Mon, 17 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Jan Nowinowski</dc:creator>
+    <guid isPermaLink="false">34249</guid>
+    </item>
+<item>
+  <title>The Mecca agreement: a loose alliance between Saudi Arabia, Pakistan and Turkey</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-12/mecca-agreement-a-loose-alliance-between-saudi-arabia-pakistan-and</link>
+  <description>On 7 August, in Mecca, Turkey, Pakistan and Saudi Arabia signed the Mecca Joint Defence Agreement, which aims to enhance collective deterrence and improve coordination and integration of the three countries’ defence capabilities. In a joint statement, the signatories declared that an armed attack on one of them would be regarded as an attack on all three. Although the agreement’s text remains unpublished, official statements have highlighted its defensive character and openness to expansion.</description>
+  <pubDate>Wed, 12 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Adam Michalski, Krzysztof Strachota</dc:creator>
+    <guid isPermaLink="false">34247</guid>
+    </item>
+<item>
+  <title>Zelensky in Belgrade: Kyiv’s interests, a fig leaf for Vučić and outrage in Kosovo</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-11/zelensky-belgrade-kyivs-interests-a-fig-leaf-vucic-and-outrage</link>
+  <description>On 7–8 August, Ukrainian President Volodymyr Zelensky made his first visit to Serbia since taking office. His meetings with President Aleksandar Vučić and Prime Minister Đuro Macut focused on economic and energy cooperation, as well as the two countries’ European integration. Serbia announced another package of humanitarian assistance for Ukraine in the healthcare and energy sectors, as well as plans for the imminent signing of a bilateral free trade agreement.</description>
+  <pubDate>Tue, 11 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Jan Nowinowski, Kacper Sienicki</dc:creator>
+    <guid isPermaLink="false">34245</guid>
+    </item>
+<item>
+  <title>North Korean missiles strike Kyiv and Zaporizhzhia. Day 1630 of the war</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-11/north-korean-missiles-strike-kyiv-and-zaporizhzhia-day-1630-war</link>
+  <description>&amp;nbsp;</description>
+  <pubDate>Tue, 11 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Andrzej Wilk, Krzysztof Nieczypor, Jacek Tarociński</dc:creator>
+    <guid isPermaLink="false">34244</guid>
+    </item>
+<item>
+  <title>Turkey: selective amnesty for PKK members</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-11/turkey-selective-amnesty-pkk-members</link>
+  <description>On 10 August, Turkey’s parliament passed a law establishing a legal mechanism enabling former Kurdistan Workers’ Party (PKK) militants to return to civilian life. The legislation was backed by the governing camp, the pro-Kurdish Peoples’ Equality and Democracy Party (DEM) and part of the opposition. Once the National Security Council (MGK) confirms that the PKK has ceased its activities and that both the organisation and its affiliates have laid down their arms, their members will be eligible for a partial amnesty.</description>
+  <pubDate>Tue, 11 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Zuzanna Krzyżanowska, Adam Michalski</dc:creator>
+    <guid isPermaLink="false">34243</guid>
+    </item>
+<item>
+  <title>Latvia: border closure with Belarus emerges as an election campaign issue</title>
+  <link>https://www.osw.waw.pl/en/publikacje/analyses/2026-08-06/latvia-border-closure-belarus-emerges-election-campaign-issue</link>
+  <description>On 4 August, Latvian Prime Minister Andris Kulbergs (the centre-right United List) overturned a decision taken by Interior Minister Jānis Dombrava (the nationalist National Alliance) on 31 July reopening the Pāternieki crossing on the Latvian-Belarusian border during the night of 4–5 August. In July, the interior minister had ordered the closure of the only road border crossing still operating between Latvia and Belarus, formally citing technical problems with local IT systems.</description>
+  <pubDate>Thu, 06 Aug 2026 14:00:00 +0200</pubDate>
+    <dc:creator>Bartosz Chmielewski</dc:creator>
+    <guid isPermaLink="false">34240</guid>
+    </item>
+
+  </channel>
+</rss>
