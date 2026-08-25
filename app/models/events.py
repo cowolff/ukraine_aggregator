@@ -63,6 +63,12 @@ class ExtractedEvent(db.Model):
             postgresql_where=text("geom IS NULL AND place_name_raw IS NOT NULL"),
         ),
         Index("ix_extracted_events_unlinked", "id", postgresql_where=text("NOT linked")),
+        # Probe index for the /api/news placement anti-join: "does this item have a placed event".
+        Index(
+            "ix_extracted_events_item_placed",
+            "news_item_id",
+            postgresql_where=text("visible AND geom IS NOT NULL"),
+        ),
         Index("ix_extracted_events_occurred", text("occurred_at DESC")),
         Index(
             "ix_extracted_events_occurred_geom",
