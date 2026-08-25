@@ -23,6 +23,11 @@ const State = {
   feedCursor: null,
   feedLoading: false,
   feedExhausted: false,
+  // --- news rail (general, unplaced news beside the map) ---
+  railCursor: null,
+  railLoading: false,
+  railExhausted: false,
+  railTier: 1,          // max reliability tier shown; 1 = most reliable only (the default)
   timer: null,
   // --- time travel ---
   timeline: null,       // {from, to, snapshots: [ISO], events_per_day: [...]}
@@ -100,6 +105,138 @@ const EVENT_LABELS = {
 
 const $ = (id) => document.getElementById(id);
 
+/* ------------------------------------------------------------------ marker shapes
+   Shape = event type (plans/MAP_SYMBOLS.md); colour stays perspective/beneficiary and opacity
+   stays confidence. Geometry is defined once, as SVG paths in a 64×64 box (~8px padding for the
+   halo and hit area): the map rasterises them into SDF sprites so `icon-color` can keep reusing
+   pointColorExpression(), and the legend/filters render the same paths as inline SVG. The unicode
+   glyphs stay the *textual* representation (popups, feed chips). */
+const SHAPE_STROKE = 7;   // mask-space stroke for hollow shapes; thinner rounds away in the SDF
+
+const EVENT_SHAPES = {
+  frontline_advance: {path: 'M32 9 L57 55 L7 55 Z'},                                    // ▲
+  frontline_claim: {path: 'M32 12 L54 52 L10 52 Z', hollow: true},                      // △
+  deep_strike: {path: 'M32 6 L38 26 L58 32 L38 38 L32 58 L26 38 L6 32 L26 26 Z'},       // ✸
+  shelling: {path: 'M32 11 A21 21 0 1 0 32 53 A21 21 0 1 0 32 11 Z'},                   // ●
+  geolocation_proof: {path: 'M32 12 A20 20 0 1 0 32 52 A20 20 0 1 0 32 12 Z', hollow: true}, // ◎
+  debunk: {path: 'M32 12 A20 20 0 1 0 32 52 A20 20 0 1 0 32 12 Z M18 46 L46 18', hollow: true}, // ⊘
+  other: {path: 'M23 23 H41 V41 H23 Z'},                                                // ·
+};
+
+const shapeImageId = (type) => `shape-${type}`;
+
+/* SDF rasterisation, the tinysdf approach (Felzenszwalb/Huttenlocher EDT) inlined: the base style
+   has no glyph server and the app ships no sprite assets. radius/cutoff follow the GL glyph
+   convention (edge at alpha 0.75) so fill and halo render at the right thresholds. */
+const SDF_SIZE = 64;
+const SDF_RADIUS = 8;
+const SDF_CUTOFF = 0.25;
+const EDT_INF = 1e20;
+
+function edt1d(grid, offset, stride, length, f, v, z) {
+  v[0] = 0;
+  z[0] = -EDT_INF;
+  z[1] = EDT_INF;
+  f[0] = grid[offset];
+  for (let q = 1, k = 0, s = 0; q < length; q++) {
+    f[q] = grid[offset + q * stride];
+    const q2 = q * q;
+    do {
+      const r = v[k];
+      s = (f[q] - f[r] + q2 - r * r) / (q - r) / 2;
+    } while (s <= z[k] && --k > -1);
+    k++;
+    v[k] = q;
+    z[k] = s;
+    z[k + 1] = EDT_INF;
+  }
+  for (let q = 0, k = 0; q < length; q++) {
+    while (z[k + 1] < q) k++;
+    const r = v[k];
+    const qr = q - r;
+    grid[offset + q * stride] = f[r] + qr * qr;
+  }
+}
+
+function edt2d(grid, size, f, v, z) {
+  for (let x = 0; x < size; x++) edt1d(grid, x, size, size, f, v, z);
+  for (let y = 0; y < size; y++) edt1d(grid, y * size, 1, size, f, v, z);
+}
+
+function renderShapeSDF(ctx, spec) {
+  const size = SDF_SIZE;
+  ctx.clearRect(0, 0, size, size);
+  const path = new Path2D(spec.path);
+  if (spec.hollow) {
+    ctx.lineWidth = SHAPE_STROKE;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#fff';
+    ctx.stroke(path);
+  } else {
+    ctx.fillStyle = '#fff';
+    ctx.fill(path);
+  }
+  const alpha = ctx.getImageData(0, 0, size, size).data;
+  const n = size * size;
+  const outer = new Float64Array(n);
+  const inner = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = alpha[i * 4 + 3] / 255;
+    outer[i] = a === 1 ? 0 : a === 0 ? EDT_INF : Math.max(0, 0.5 - a) ** 2;
+    inner[i] = a === 1 ? EDT_INF : a === 0 ? 0 : Math.max(0, a - 0.5) ** 2;
+  }
+  const f = new Float64Array(size);
+  const v = new Uint16Array(size);
+  const z = new Float64Array(size + 1);
+  edt2d(outer, size, f, v, z);
+  edt2d(inner, size, f, v, z);
+  const data = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) {
+    const d = Math.sqrt(outer[i]) - Math.sqrt(inner[i]);
+    const value = Math.round(255 - 255 * (d / SDF_RADIUS + SDF_CUTOFF));
+    data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = value;
+    data[i * 4 + 3] = value;
+  }
+  return {width: size, height: size, data};
+}
+
+/* Build the seven sprites; false = no 2D canvas or addImage refused, and the caller falls back
+   to the circle layer — a shapeless map beats an empty one. */
+function installEventImages() {
+  let ctx = null;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = SDF_SIZE;
+    ctx = canvas.getContext('2d', {willReadFrequently: true});
+  } catch { /* handled below */ }
+  if (!ctx) return false;
+  try {
+    for (const [type, spec] of Object.entries(EVENT_SHAPES)) {
+      const id = shapeImageId(type);
+      if (!map.hasImage(id)) {
+        map.addImage(id, renderShapeSDF(ctx, spec), {sdf: true, pixelRatio: 2});
+      }
+    }
+    return true;
+  } catch (err) {
+    console.error('marker shapes failed, falling back to circles:', err);
+    return false;
+  }
+}
+
+/* Legend/filter twin of the map sprites: same path, same fill-vs-stroke, colour from the text. */
+function shapeIconHTML(type) {
+  const spec = EVENT_SHAPES[type];
+  if (!spec) return `<span class="glyph">${(State.config?.glyphs || {})[type] || '·'}</span>`;
+  const paint = spec.hollow
+    ? `fill="none" stroke="currentColor" stroke-width="${SHAPE_STROKE}"
+       stroke-linecap="round" stroke-linejoin="round"`
+    : 'fill="currentColor"';
+  return `<svg class="shape-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+      <path d="${spec.path}" ${paint}/></svg>`;
+}
+
 /* ------------------------------------------------------------------ fetch helpers */
 async function getJSON(url, {useEtag = false} = {}) {
   const headers = {};
@@ -136,6 +273,9 @@ function escapeHTML(value) {
 
 /* ------------------------------------------------------------------ map */
 let map;
+/* Which unclustered-events layer is live: 'events-icons' (shapes), or 'events-circles' when
+   sprite generation failed and the map fell back (plans/MAP_SYMBOLS.md §2.4). */
+let eventLayerId = 'events-icons';
 const PERSPECTIVE_ORDER = ['ukrainian', 'russian', 'western', 'neutral'];
 
 function baseStyle() {
@@ -227,21 +367,54 @@ function initMap() {
     });
 
     map.addSource('events', {type: 'geojson', data: State.events});
-    map.addLayer({
-      id: 'events-circles', type: 'circle', source: 'events',
-      filter: ['!', ['has', 'cluster']],
-      paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 5, 8, 8, 12, 11],
-        'circle-color': pointColorExpression(),
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 1.2,
-        // Low-confidence extractions render faintly and never count as evidence (PLAN §21).
-        'circle-opacity': ['case',
-          ['<', ['coalesce', ['get', 'confidence'], 1], State.config.low_confidence_floor], 0.45, 0.95],
-        'circle-stroke-opacity': ['case',
-          ['<', ['coalesce', ['get', 'confidence'], 1], State.config.low_confidence_floor], 0.45, 0.95],
-      },
-    });
+    // Shape = event type (plans/MAP_SYMBOLS.md). SDF sprites keep the colour data-driven with
+    // the same expression the circles used; if sprite generation is impossible (2D canvas
+    // denied where WebGL works), the old circle layer is the fallback.
+    if (installEventImages()) {
+      eventLayerId = 'events-icons';
+      map.addLayer({
+        id: eventLayerId, type: 'symbol', source: 'events',
+        filter: ['!', ['has', 'cluster']],
+        layout: {
+          'icon-image': ['match', ['get', 'event_type'],
+            ...Object.keys(EVENT_SHAPES).flatMap((t) => [t, shapeImageId(t)]),
+            shapeImageId('other')],
+          // Sprites are 64px at pixelRatio 2 (32px base). A touch larger than the old circle
+          // diameters (10/16/22px): a silhouette needs more pixels than a disc to read.
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.5, 8, 0.75, 12, 1],
+          // Never collision-cull a marker — every circle always rendered, so must every shape.
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+        },
+        paint: {
+          'icon-color': pointColorExpression(),
+          'icon-halo-color': '#ffffff',
+          'icon-halo-width': 1.2,
+          // Low-confidence extractions render faintly and never count as evidence (PLAN §21).
+          'icon-opacity': lowConfidenceOpacity(),
+        },
+      });
+      // Custom images do not survive a setStyle(); rebuild rather than lose the markers.
+      map.on('styleimagemissing', (e) => {
+        if (e.id.startsWith('shape-')) installEventImages();
+      });
+    } else {
+      eventLayerId = 'events-circles';
+      map.addLayer({
+        id: eventLayerId, type: 'circle', source: 'events',
+        filter: ['!', ['has', 'cluster']],
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 5, 8, 8, 12, 11],
+          'circle-color': pointColorExpression(),
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1.2,
+          // Low-confidence extractions render faintly and never count as evidence (PLAN §21).
+          'circle-opacity': lowConfidenceOpacity(),
+          'circle-stroke-opacity': lowConfidenceOpacity(),
+        },
+      });
+      setStatus('marker shapes unavailable — showing circles', true);
+    }
     map.addLayer({
       id: 'clusters', type: 'circle', source: 'events',
       filter: ['has', 'cluster'],
@@ -254,9 +427,9 @@ function initMap() {
       },
     });
 
-    map.on('click', 'events-circles', onEventClick);
+    map.on('click', eventLayerId, onEventClick);
     map.on('click', 'clusters', onClusterClick);
-    for (const layer of ['events-circles', 'clusters']) {
+    for (const layer of [eventLayerId, 'clusters']) {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     }
@@ -288,6 +461,11 @@ function pointColorExpression() {
   // editorial encoding, and it is what makes a shortlisted spot findable at a glance.
   const base = pointColorBase();
   return ['case', ['==', ['get', 'saved'], true], SAVED_COLOR, base];
+}
+
+function lowConfidenceOpacity() {
+  return ['case',
+    ['<', ['coalesce', ['get', 'confidence'], 1], State.config.low_confidence_floor], 0.45, 0.95];
 }
 
 function pointColorBase() {
@@ -346,8 +524,9 @@ function applyColorMode() {
     ? 'Who the event favours, regardless of who reported it.'
     : 'Who is reporting it.';
 
-  if (map && map.getLayer('events-circles')) {
-    map.setPaintProperty('events-circles', 'circle-color', pointColorExpression());
+  if (map && map.getLayer(eventLayerId)) {
+    const colorProp = eventLayerId === 'events-icons' ? 'icon-color' : 'circle-color';
+    map.setPaintProperty(eventLayerId, colorProp, pointColorExpression());
     map.setPaintProperty('clusters', 'circle-color', clusterColorExpression());
   }
   buildLegend();
@@ -466,7 +645,7 @@ async function refreshEvents() {
   }
 }
 
-function popupHTML(p) {
+function popupHTML(p, pager = null) {
   const glyph = State.config.glyphs[p.event_type] || '·';
   const label = EVENT_LABELS[p.event_type] || p.event_type;
   const title = p.title ? escapeHTML(p.title) : '(untitled report)';
@@ -491,15 +670,31 @@ function popupHTML(p) {
     : '';
   const origBtn = p.translated
     ? `<button class="orig-btn" type="button" data-pop="orig">original</button>` : '';
+  // English summary from the pipeline: focused on this marker's location when the item names it,
+  // the item's general summary otherwise. Absent until the summary task has run.
+  const summary = p.summary
+    ? `<p class="summary">${escapeHTML(p.summary)}</p>` : '';
+  // Several reports can share one spot (same settlement, stacked icons); the pager lets the
+  // reader step through the pile instead of only ever reaching the top marker.
+  const pagerRow = pager && pager.total > 1
+    ? `<div class="pager">
+        <button class="pager-btn" type="button" data-pop="prev" aria-label="Previous report here">‹</button>
+        <span class="pager-count">${pager.index + 1}/${pager.total}</span>
+        <button class="pager-btn" type="button" data-pop="next" aria-label="Next report here">›</button>
+        <span class="pager-note">reports at this spot</span>
+      </div>`
+    : '';
 
   return `<div class="popup" data-title-en="${escapeHTML(p.title || '')}"
        data-title-orig="${escapeHTML(p.title_original || '')}">
+    ${pagerRow}
     <div class="row">
       ${star}
       <span class="pill p-${escapeHTML(p.perspective)}">${escapeHTML(p.perspective)}</span>
       <span class="source">${escapeHTML(p.source_name)}</span>
     </div>
     <h3>${heading}${origBtn}</h3>
+    ${summary}
     <div class="row"><span class="glyph">${glyph}</span> ${escapeHTML(label)}</div>
     <div class="row"><span class="dot" style="background:${favoursColor}"></span>
       <span>${favours}</span></div>
@@ -510,18 +705,48 @@ function popupHTML(p) {
 }
 
 function onEventClick(e) {
-  const feature = e.features?.[0];
-  if (!feature) return;
-  const popup = new maplibregl.Popup({closeButton: true, maxWidth: '300px'})
-    .setLngLat(feature.geometry.coordinates)
-    .setHTML(popupHTML(feature.properties))
-    .addTo(map);
-  wirePopup(popup.getElement(), feature.properties);
+  // Every marker under the click, not just the topmost: co-located events stack their icons,
+  // and the ones underneath would otherwise be unreachable. GeoJSON sources are tiled
+  // internally, so the same feature can be reported more than once — dedupe by event id.
+  const seen = new Set();
+  const group = (e.features || [])
+    .filter((f) => {
+      const key = f.properties.id ?? `${f.properties.news_item_id}:${f.properties.event_type}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => String(b.properties.published_at).localeCompare(String(a.properties.published_at)));
+  if (group.length) openEventPopup(group);
+}
+
+/* One popup paging through a stack of markers with ‹ ›, newest first. A single feature renders
+   exactly the old popup — no pager row. */
+function openEventPopup(features, startIndex = 0) {
+  const popup = new maplibregl.Popup({closeButton: true, maxWidth: '300px'});
+  const render = (i) => {
+    const index = ((i % features.length) + features.length) % features.length;
+    const feature = features[index];
+    // The stack is "under one click", not necessarily one exact point — follow the current item.
+    popup.setLngLat(feature.geometry.coordinates);
+    popup.setHTML(popupHTML(feature.properties, {index, total: features.length}));
+    if (!popup.isOpen()) popup.addTo(map);
+    wirePopup(popup.getElement(), feature.properties,
+      {index, total: features.length, onPage: render});
+  };
+  render(startIndex);
+  return popup;
 }
 
 /* Popup markup is a string, so its controls are wired after it lands in the DOM. */
-function wirePopup(root, props) {
+function wirePopup(root, props, pager = null) {
   if (!root) return;
+  if (pager && pager.onPage) {
+    root.querySelector('[data-pop=prev]')
+      ?.addEventListener('click', () => pager.onPage(pager.index - 1));
+    root.querySelector('[data-pop=next]')
+      ?.addEventListener('click', () => pager.onPage(pager.index + 1));
+  }
   const star = root.querySelector('[data-pop=star]');
   if (star) {
     star.addEventListener('click', () => {
@@ -643,11 +868,10 @@ function buildFilters() {
   const typeBox = $('type-filters');
   for (const type of State.config.event_types) {
     State.types.add(type);
-    const glyph = State.config.glyphs[type] || '·';
     typeBox.append(checkbox(type, true, (on) => {
       on ? State.types.add(type) : State.types.delete(type);
       refreshEvents();
-    }, `<span class="glyph">${glyph}</span> ${EVENT_LABELS[type] || type}`));
+    }, `${shapeIconHTML(type)} ${EVENT_LABELS[type] || type}`));
   }
 
   $('range').addEventListener('change', (e) => {
@@ -658,7 +882,8 @@ function buildFilters() {
   $('layer-ru').addEventListener('change', (e) => toggleLayers(['ru-fill', 'ru-line'], e.target.checked));
   $('layer-grey').addEventListener('change', (e) => toggleLayers(['grey-fill', 'grey-line'], e.target.checked));
 
-  for (const [button, body] of [['filters-toggle', 'filters-body'], ['legend-toggle', 'legend-body']]) {
+  for (const [button, body] of [['filters-toggle', 'filters-body'], ['legend-toggle', 'legend-body'],
+                                ['news-rail-toggle', 'news-rail-body']]) {
     $(button).addEventListener('click', () => {
       const expanded = $(button).getAttribute('aria-expanded') === 'true';
       $(button).setAttribute('aria-expanded', String(!expanded));
@@ -696,9 +921,9 @@ function buildLegend() {
   const intro = $('legend-intro');
   if (intro) {
     intro.textContent = beneficiary
-      ? 'Colour = who the event favours. Glyph = what happened. Both are also written out in '
+      ? 'Colour = who the event favours. Shape = what happened. Both are also written out in '
         + 'every popup and tooltip, so colour is never the only cue.'
-      : 'Colour = whose reporting it is. Glyph = what happened. Both are also written out in '
+      : 'Colour = whose reporting it is. Shape = what happened. Both are also written out in '
         + 'every popup and tooltip, so colour is never the only cue.';
   }
 
@@ -743,7 +968,7 @@ function buildLegend() {
   typeList.innerHTML = '';
   for (const type of State.config.event_types) {
     const li = document.createElement('li');
-    li.innerHTML = `<span class="glyph">${State.config.glyphs[type]}</span>
+    li.innerHTML = `${shapeIconHTML(type)}
       <span>${EVENT_LABELS[type] || type}</span>`;
     typeList.append(li);
   }
@@ -786,13 +1011,15 @@ async function loadFeed({reset = false} = {}) {
   }
 }
 
-function feedRow(item) {
+function feedRow(item, {rail = false} = {}) {
   const li = document.createElement('li');
   li.dataset.itemId = item.id;
+  li.dataset.publishedAt = item.published_at || '';
   const placed = (item.events || []).find((e) => e.placed);
   const chips = (item.events || [])
+    // In the rail everything is unplaced by definition, so the suffix would be noise.
     .map((e) => `<span class="chip">${State.config.glyphs[e.event_type] || '·'}
-      ${EVENT_LABELS[e.event_type] || e.event_type}${e.placed ? '' : ' (unplaced)'}</span>`)
+      ${EVENT_LABELS[e.event_type] || e.event_type}${e.placed || rail ? '' : ' (unplaced)'}</span>`)
     .join('');
   const saved = Saved.has(item.id);
   li.classList.toggle('saved', saved);
@@ -804,6 +1031,15 @@ function feedRow(item) {
   const original = item.translated
     ? `<button class="orig-btn" type="button" data-role="orig">original</button>`
     : '';
+  // Same faithful-labelling policy as the popups: confidence comes from the extraction,
+  // reliability from the source record — never inferred.
+  let railMeta = '';
+  if (rail) {
+    const confidences = (item.events || []).map((e) => e.confidence).filter((c) => c != null);
+    const parts = confidences.length ? [`confidence ${Math.max(...confidences).toFixed(2)}`] : [];
+    if (item.source.reliability_tier != null) parts.push(`source tier ${item.source.reliability_tier}`);
+    if (parts.length) railMeta = `<span class="when">· ${parts.join(' · ')}</span>`;
+  }
 
   li.innerHTML = `
     <div class="head">
@@ -811,7 +1047,7 @@ function feedRow(item) {
               aria-pressed="${saved}" title="Save to my list">${saved ? '★' : '☆'}</button>
       <span class="pill p-${escapeHTML(item.source.perspective)}">${escapeHTML(item.source.perspective)}</span>
       <span class="source">${escapeHTML(item.source.name)}</span>
-      <span class="when">· ${relativeTime(item.published_at)}</span>
+      <span class="when">· ${relativeTime(item.published_at)}</span>${railMeta}
     </div>
     <h3>${titleHTML}${original}</h3>
     ${item.snippet ? `<p class="snippet">${escapeHTML(item.snippet)}</p>` : ''}
@@ -824,8 +1060,8 @@ function feedRow(item) {
     star.textContent = nowSaved ? '★' : '☆';
     star.classList.toggle('on', nowSaved);
     star.setAttribute('aria-pressed', String(nowSaved));
-    repaintSaved();
-    if (State.feedSavedOnly && !nowSaved) li.remove();
+    repaintSaved();          // also repaints the same story's row in the other list
+    if (!rail && State.feedSavedOnly && !nowSaved) li.remove();
   });
 
   const origButton = li.querySelector('[data-role=orig]');
@@ -856,7 +1092,7 @@ function feedRow(item) {
 }
 
 function renderFeedSavedState() {
-  for (const li of document.querySelectorAll('#feed li')) {
+  for (const li of document.querySelectorAll('#feed li, #rail-feed li')) {
     const saved = Saved.has(li.dataset.itemId);
     li.classList.toggle('saved', saved);
     const star = li.querySelector('[data-role=star]');
@@ -905,24 +1141,102 @@ function renderSavedFeed() {
     });
 }
 
+/* ------------------------------------------------------------------ news rail
+   General news beside the map (plans/NEWS_RAIL.md): items with no clear location — nothing the
+   gazetteer could resolve and no explicit coordinates — so they never get a marker. Same rows
+   as the Feed tab, same shortlist, filtered server-side with placement=unplaced. */
+const RAIL_PAGE = 20;
+
+function railURL(cursor) {
+  // order=published: latest *reporting* first, not latest ingest — backfilled history has new
+  // ids with old dates and must not float to the top. The cursor is opaque (issued by the API).
+  const params = new URLSearchParams({
+    placement: 'unplaced',
+    order: 'published',
+    max_tier: String(State.railTier),
+    limit: String(RAIL_PAGE),
+  });
+  if (cursor) params.set('cursor', cursor);
+  // The rail follows the time scrubber: past news over a past map, same window as the markers.
+  if (isHistorical()) {
+    params.set('from', new Date(State.at.getTime() - State.rangeHours * HOUR_MS).toISOString());
+    params.set('to', State.at.toISOString());
+  }
+  return `/api/news?${params}`;
+}
+
+async function loadRail({reset = false} = {}) {
+  if (State.railLoading) return;
+  if (reset) {
+    State.railCursor = null;
+    State.railExhausted = false;
+    $('rail-feed').innerHTML = '';
+  }
+  if (State.railExhausted) return;
+  State.railLoading = true;
+  $('rail-end').textContent = 'Loading…';
+  try {
+    const {data} = await getJSON(railURL(State.railCursor));
+    for (const item of data.items || []) $('rail-feed').append(feedRow(item, {rail: true}));
+    State.railCursor = data.next_cursor;
+    State.railExhausted = !data.next_cursor;
+    $('rail-end').textContent = $('rail-feed').children.length === 0
+      ? 'Nothing at this source quality for this window.'
+      : (State.railExhausted ? 'End.' : 'Scroll for more…');
+  } catch (err) {
+    // Keep the panel with the error line rather than hiding it — the next poll retries.
+    $('rail-end').textContent = `Unavailable (${err.message})`;
+  } finally {
+    State.railLoading = false;
+  }
+}
+
+/* Poll tick: prepend only unseen items, never reset — the reader's scroll position must not be
+   yanked. A row whose item got geocoded since it was rendered simply stays until the next full
+   reload; it stops appearing in new pages. */
+async function refreshRail() {
+  if (State.railLoading) return;
+  const list = $('rail-feed');
+  const top = list.firstElementChild;
+  if (!top) { loadRail({reset: true}); return; }
+  // The list is in published order, so "new" = newer than the top row's timestamp (ids won't
+  // do: backfill hands out large ids with old dates). The id set guards against duplicating a
+  // tie on the exact same timestamp.
+  const topTime = new Date(top.dataset.publishedAt || 0).getTime();
+  try {
+    const {data, unchanged} = await getJSON(railURL(null), {useEtag: true});
+    if (unchanged || !data) return;
+    const have = new Set(Array.from(list.children, (li) => li.dataset.itemId));
+    const fresh = (data.items || []).filter((item) =>
+      !have.has(String(item.id)) && new Date(item.published_at).getTime() >= topTime);
+    for (const item of fresh.reverse()) list.prepend(feedRow(item, {rail: true}));
+  } catch { /* transient; the next tick retries */ }
+}
+
 function showOnMap(event, item) {
   switchTab('map');
   const jump = () => {
     map.flyTo({center: [event.lon, event.lat], zoom: 11, duration: 900});
-    new maplibregl.Popup({closeButton: true, maxWidth: '300px'})
-      .setLngLat([event.lon, event.lat])
-      .setHTML(popupHTML({
+    // A single pseudo-feature: same popup as a map click (wired star/original included),
+    // just without a pager.
+    openEventPopup([{
+      geometry: {type: 'Point', coordinates: [event.lon, event.lat]},
+      properties: {
         event_type: event.event_type,
+        news_item_id: item.id,
         perspective: item.source.perspective,
         source_name: item.source.name,
         title: item.title,
+        title_original: item.title_original,
+        translated: item.translated,
+        summary: event.summary || item.summary,
         url: item.url,
         published_at: item.published_at,
         confidence: event.confidence,
         reliability_tier: item.source.reliability_tier,
         coord_source: 'gazetteer_match',
-      }))
-      .addTo(map);
+      },
+    }]);
   };
   map.loaded() ? jump() : map.once('load', jump);
 }
@@ -1002,6 +1316,7 @@ function setInstant(date, {fromSlider = false} = {}) {
   updateTimeReadout();
   refreshFrontline();
   refreshEvents();
+  loadRail({reset: true});
 }
 
 function stepInstant(hours) {
@@ -1158,6 +1473,22 @@ async function boot() {
   initMap();
   repaintSaved();
 
+  // The rail starts collapsed on middling widths so two open rails never squeeze the map;
+  // phones hide it entirely in CSS (the Feed tab covers them).
+  if (window.matchMedia('(max-width: 1100px)').matches) {
+    $('news-rail-toggle').setAttribute('aria-expanded', 'false');
+    $('news-rail-body').hidden = true;
+  }
+  loadRail({reset: true});
+  $('news-rail-body').addEventListener('scroll', () => {
+    const el = $('news-rail-body');
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 300) loadRail();
+  });
+  $('rail-tier').addEventListener('change', (e) => {
+    State.railTier = Number(e.target.value) || 1;
+    loadRail({reset: true});
+  });
+
   const feedPerspective = $('feed-perspective');
   for (const perspective of PERSPECTIVE_ORDER) {
     if (!State.config.perspectives.includes(perspective)) continue;
@@ -1208,6 +1539,7 @@ async function boot() {
     if (isHistorical()) return;       // a pinned point in time must not be refreshed out from under
     refreshFrontline();
     refreshEvents();
+    refreshRail();
     refreshNotifications();
   }, period);
   // Keep the scrubber's bounds current as new data arrives.

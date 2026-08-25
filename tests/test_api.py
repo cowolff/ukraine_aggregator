@@ -32,6 +32,9 @@ class TestConfig:
         assert "frontline_advance" in payload["event_types"]
         assert set(payload["colors"]) == {"ukrainian", "russian", "western", "neutral"}
         assert payload["glyphs"]["deep_strike"]
+        # The frontend mirrors this key set with a marker shape per type (EVENT_SHAPES in
+        # app.js, plans/MAP_SYMBOLS.md); a type added on one side only must fail loudly here.
+        assert set(payload["glyphs"]) == set(payload["event_types"])
 
 
 class TestFrontlineEndpoint:

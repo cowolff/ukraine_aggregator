@@ -670,3 +670,45 @@ The general shape of both §34 and §35 is the same mistake twice: the rule engi
 *type* without asking what the underlying item actually asserted. A GeoConfirmed placemark typed
 `geolocation_proof` verifies a thing, not control; a General Staff digest typed
 `frontline_advance` at thirty settlements asserts a change at none of them.
+
+## 36. News rail: the two decisions plans/NEWS_RAIL.md deferred to implementation
+
+The rail itself landed as specified (`placement=` on `/api/news`, migration
+`0006_news_placement_index`, mirrored right-rail panel). Two choices were left open in the plan:
+
+**Index (§3.1):** verified with `EXPLAIN ANALYZE` against a live corpus — the unplaced query
+runs as a backward PK scan with an index-only anti-join probe on
+`ix_extracted_events_item_placed` (0.1 ms, zero heap fetches). The index stays.
+
+**Timebar vs. rail (§4):** the simple version won. The timebar keeps its centred
+`min(96vw,720px)`; on viewports narrower than ~1430px its right end can slide under the rail,
+and its higher z-index (6 vs 5) means it wins that corner. What was *not* acceptable was
+burying MapLibre's own controls: the zoom, scale and attribution controls at `top-right` /
+`bottom-right` sat exactly under the rail column, so `style.css` shifts both control corners
+left of the rail (and back to the edge below 640px, where the rail is hidden).
+
+One fix beyond the plan: a collapsed `.panel` used to keep its `flex: 1 1 auto` and stretch
+into a tall empty box over the map — invisible before because nothing started collapsed, but
+the rail starts collapsed on widths ≤1100px. `.panel:has(> .panel-body[hidden])` now stops the
+growth; this also fixes the same artefact when a reader collapses the legend.
+
+## 37. Map symbols: size stops and what the plan left to tuning
+
+Per-type marker shapes landed as specified in `plans/MAP_SYMBOLS.md` (SDF sprites generated at
+boot from shared SVG paths, symbol layer, circle fallback). Two values differ from the plan's
+illustrative numbers:
+
+**`icon-size` stops (§2.2):** the plan sketched 0.30/0.42/0.56 on the assumption they would be
+tuned. Shipped: **0.5/0.75/1.0** (zoom 4/8/12) on the 64px-at-`pixelRatio:2` sprites. The
+shapes are drawn with ~8px of box padding, so the plan's stops rendered the actual silhouette
+*smaller* than the old circle diameters (10/16/22px) — the opposite of the plan's own "a touch
+larger" requirement. The shipped stops give ~12/18/24px of silhouette.
+
+**`styleimagemissing` (§2.4):** implemented as a rebuild-all — `installEventImages()` skips
+images that already exist (`map.hasImage`), so re-running it for any missing `shape-*` id is
+idempotent and simpler than per-id regeneration.
+
+One §4 nuance: `shapeIconHTML()` falls back to the unicode glyph span for a type with no shape
+entry, so a server-added event type degrades to the old rendering in the legend/filters instead
+of an empty icon; the `test_config_exposes_client_contract` key-set assertion is what actually
+flags the drift.

@@ -72,7 +72,7 @@
     <aside class="panel legend" id="legend">
       <button class="panel-toggle" id="legend-toggle" aria-expanded="true">Legend</button>
       <div class="panel-body" id="legend-body">
-        <p class="legend-note" id="legend-intro">Colour = whose reporting it is. Glyph = what
+        <p class="legend-note" id="legend-intro">Colour = whose reporting it is. Shape = what
           happened. Both are also written out in every popup and tooltip, so colour is never the
           only cue.</p>
         <ul class="legend-list" id="legend-perspectives"></ul>
@@ -92,6 +92,26 @@
           evidence for moving the line.</p>
       </div>
     </aside>
+    </div>
+
+    <div class="right-rail">
+      <aside class="panel news-rail" id="news-rail">
+        <button class="panel-toggle" id="news-rail-toggle" aria-expanded="true">General news</button>
+        <div class="panel-body" id="news-rail-body">
+          <p class="seg-help">Reports without a clear location — they never get a map marker.
+            Everything, placed or not, is on the Feed tab.</p>
+          <fieldset>
+            <legend>Source quality</legend>
+            <select id="rail-tier" aria-label="Filter by source reliability tier">
+              <option value="1" selected>Tier 1 — most reliable only</option>
+              <option value="2">Tiers 1–2</option>
+              <option value="3">All tiers</option>
+            </select>
+          </fieldset>
+          <ol class="feed rail-feed" id="rail-feed"></ol>
+          <div class="feed-end" id="rail-end"></div>
+        </div>
+      </aside>
     </div>
 
     <div class="timebar" id="timebar" hidden>
