@@ -53,6 +53,7 @@ const BENEFICIARY_COLORS = {ua: LEAN_UA, ru: LEAN_RU};
    private and survives reloads but not a different device. Keyed by news item id, so saving from
    the map and from the feed refer to the same story. */
 const SAVED_KEY = 'ukraine-aggregator:saved:v1';
+const PANELS_KEY = 'ukraine-aggregator:panels:v1';
 
 const Saved = {
   ids: new Set(),
@@ -882,12 +883,22 @@ function buildFilters() {
   $('layer-ru').addEventListener('change', (e) => toggleLayers(['ru-fill', 'ru-line'], e.target.checked));
   $('layer-grey').addEventListener('change', (e) => toggleLayers(['grey-fill', 'grey-line'], e.target.checked));
 
-  for (const [button, body] of [['filters-toggle', 'filters-body'], ['legend-toggle', 'legend-body'],
-                                ['news-rail-toggle', 'news-rail-body']]) {
+  // Panels start collapsed; each one remembers its last open/closed choice in this browser.
+  let panelState = {};
+  try { panelState = JSON.parse(localStorage.getItem(PANELS_KEY) || '{}'); } catch { /* stay collapsed */ }
+  for (const [id, button, body] of [['filters', 'filters-toggle', 'filters-body'],
+                                    ['legend', 'legend-toggle', 'legend-body'],
+                                    ['news-rail', 'news-rail-toggle', 'news-rail-body']]) {
+    const setExpanded = (expanded) => {
+      $(button).setAttribute('aria-expanded', String(expanded));
+      $(body).hidden = !expanded;
+    };
+    setExpanded(panelState[id] === true);
     $(button).addEventListener('click', () => {
-      const expanded = $(button).getAttribute('aria-expanded') === 'true';
-      $(button).setAttribute('aria-expanded', String(!expanded));
-      $(body).hidden = expanded;
+      const expanded = $(button).getAttribute('aria-expanded') !== 'true';
+      setExpanded(expanded);
+      panelState[id] = expanded;
+      try { localStorage.setItem(PANELS_KEY, JSON.stringify(panelState)); } catch { /* private mode */ }
     });
   }
 }
@@ -1473,12 +1484,6 @@ async function boot() {
   initMap();
   repaintSaved();
 
-  // The rail starts collapsed on middling widths so two open rails never squeeze the map;
-  // phones hide it entirely in CSS (the Feed tab covers them).
-  if (window.matchMedia('(max-width: 1100px)').matches) {
-    $('news-rail-toggle').setAttribute('aria-expanded', 'false');
-    $('news-rail-body').hidden = true;
-  }
   loadRail({reset: true});
   $('news-rail-body').addEventListener('scroll', () => {
     const el = $('news-rail-body');

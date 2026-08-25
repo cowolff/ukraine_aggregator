@@ -748,3 +748,15 @@ newest-first, and `openEventPopup()` renders a `‹ 2/13 ›` pager row that re-
 the popup per step, following each item's own coordinates. `showOnMap()` feeds the same function
 a single pseudo-feature, which as a side effect fixed its previously-unwired star/original
 buttons.
+
+## 39. Panels start collapsed; each remembers its state per browser
+
+Post-plan change (user request): Filters, Legend and the General-news rail now all start
+**collapsed** by default, replacing NEWS_RAIL.md's width rule (rail collapsed only between
+641–1100px via a one-shot `matchMedia` check, everything else open). Each toggle click is
+persisted per panel to `localStorage` (`ukraine-aggregator:panels:v1`, same try/catch treatment
+as the saved-items shortlist), so a returning browser reopens exactly the panels it last had
+open. The static HTML ships `aria-expanded="false"` + `hidden` so the default case never
+flashes open before the script runs; the stored state is applied in `buildFilters()`. The
+stored choice wins over viewport width — someone who opens the rail on a narrow window gets it
+back open there too.

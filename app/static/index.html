@@ -28,8 +28,8 @@
 
     <div class="left-rail">
     <aside class="panel filters" id="filters">
-      <button class="panel-toggle" id="filters-toggle" aria-expanded="true">Filters</button>
-      <div class="panel-body" id="filters-body">
+      <button class="panel-toggle" id="filters-toggle" aria-expanded="false">Filters</button>
+      <div class="panel-body" id="filters-body" hidden>
         <fieldset>
           <legend>Time range</legend>
           <select id="range" aria-label="Time range">
@@ -70,8 +70,8 @@
     </aside>
 
     <aside class="panel legend" id="legend">
-      <button class="panel-toggle" id="legend-toggle" aria-expanded="true">Legend</button>
-      <div class="panel-body" id="legend-body">
+      <button class="panel-toggle" id="legend-toggle" aria-expanded="false">Legend</button>
+      <div class="panel-body" id="legend-body" hidden>
         <p class="legend-note" id="legend-intro">Colour = whose reporting it is. Shape = what
           happened. Both are also written out in every popup and tooltip, so colour is never the
           only cue.</p>
@@ -96,8 +96,8 @@
 
     <div class="right-rail">
       <aside class="panel news-rail" id="news-rail">
-        <button class="panel-toggle" id="news-rail-toggle" aria-expanded="true">General news</button>
-        <div class="panel-body" id="news-rail-body">
+        <button class="panel-toggle" id="news-rail-toggle" aria-expanded="false">General news</button>
+        <div class="panel-body" id="news-rail-body" hidden>
           <p class="seg-help">Reports without a clear location — they never get a map marker.
             Everything, placed or not, is on the Feed tab.</p>
           <fieldset>
