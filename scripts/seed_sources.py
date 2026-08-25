@@ -38,11 +38,38 @@ INTERVAL_BY_FREQUENCY = {
 }
 DEFAULT_INTERVAL = 7200
 
-TIER1_SOURCE_TYPES = {"Government", "Think Tank/NGO", "Independent OSINT"}
+# Reliability tiers (1 = evidence-grade, 3 = never moves the map — see app/services/rules.py).
+# Tier 1 is reserved for sources that verify rather than assert: independent OSINT, think tanks,
+# and media with a formal verification operation. Governments — belligerent ministries and allied
+# ones alike — are partisan primary sources: quotable as claims, so tier 2, never tier 1.
+TIER1_SOURCE_TYPES = {"Think Tank/NGO", "Independent OSINT"}
+# Phrases are deliberately specific: a note *praising* a source for labelling unverified claims
+# (Meduza, CNN) must not trip the same pattern as one that *amplifies* unverified claims.
 TIER3_NOTE_PATTERNS = re.compile(
-    r"propagand|disinformation|low verification|unverified|state media|fabricat|no independent",
+    r"propagand|disinformation|low verification|state media|fabricat"
+    r"|systematically unverified|amplif\w+ unverified|never as evidence"
+    r"|wholly partisan",
     re.IGNORECASE,
 )
+# Notes that flag a pass-through/commentary source (aggregator re-renders, translation projects,
+# advocacy think tanks): honest and usable, but they add no verification of their own — cap at 2.
+TIER2_NOTE_PATTERNS = re.compile(r"no independent verification", re.IGNORECASE)
+# Name-based overrides, first match wins. These beat the type/notes heuristics because the
+# reliability of these outlets is established by track record, not by catalogue metadata.
+TIER_OVERRIDES: list[tuple[re.Pattern, int]] = [
+    # Belligerent-state propaganda organs: capture claims routinely premature, loss figures
+    # routinely fabricated or inflated. Kept ingestible as a record of official claims.
+    (re.compile(r"russian ministry of defen[cs]e|\btass\b|ria novosti|soloviev|readovka|zvezda", re.IGNORECASE), 3),
+    # International outlets with formal verification desks (BBC Verify, Reuters/AFP fact-check
+    # operations) and rigorous Russian exile media (Meduza, Mediazona named-death counts).
+    (re.compile(r"\bbbc\b|reuters|agence france|deutsche welle|radio free europe|rfe/?rl|meduza|mediazona", re.IGNORECASE), 1),
+    # State-founded analysis shops do messaging, not verification. StopFake and Necro Mancer are
+    # rescued from note-pattern false positives: one *counters* disinformation, the other's
+    # casualty-ID database is solid despite a note calling its tone propagandistic.
+    (re.compile(r"russian international affairs council|stopfake|necro mancer", re.IGNORECASE), 2),
+    # Satellite instrument data — the one government feed that measures instead of asserts.
+    (re.compile(r"nasa firms", re.IGNORECASE), 1),
+]
 SKIP_NOTE_PATTERNS = re.compile(
     r"preview[s]? disabled|dormant|inactive|archived|no longer updat|defunct|dead\b",
     re.IGNORECASE,
@@ -141,7 +168,15 @@ def perspective_of(row: dict) -> str | None:
 
 
 def tier_of(row: dict) -> int:
+    title = row.get("title") or ""
+    for pattern, tier in TIER_OVERRIDES:
+        if pattern.search(title):
+            return tier
     notes = row.get("reliability_notes") or ""
+    # Pass-through check first: a translation/aggregation project's note may warn that the
+    # *upstream* content is propaganda (WarTranslated) without the project itself being tier 3.
+    if TIER2_NOTE_PATTERNS.search(notes):
+        return 2
     if TIER3_NOTE_PATTERNS.search(notes):
         return 3
     if (row.get("source_type") or "").strip() in TIER1_SOURCE_TYPES:

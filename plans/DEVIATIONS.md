@@ -712,3 +712,39 @@ One §4 nuance: `shapeIconHTML()` falls back to the unicode glyph span for a typ
 entry, so a server-added event type degrades to the old rendering in the legend/filters instead
 of an empty icon; the `test_config_exposes_client_contract` key-set assertion is what actually
 flags the drift.
+
+## 38. Source reliability tiers re-graded: verification, not officialdom
+
+The original `tier_of()` in `scripts/seed_sources.py` put every catalogue row typed
+`Government` in tier 1 — which graded the Russian MoD (capture claims "premature by days or
+weeks", loss figures routinely inflated) as *more* reliable than BBC Verify or Reuters, and
+let its assertions both pass the default tier-1 news filter and count as confirmation-grade
+evidence in `rules.py`. Re-graded on the principle that tier 1 means "verifies rather than
+asserts":
+
+- **Governments are tier 2 across the board** — belligerent ministries and allied ones alike
+  are partisan primary sources: quotable as claims, never as verification. Ukrainian General
+  Staff moved 1→2 for the same reason (unverifiable claims, systematic under-reporting of
+  withdrawals). NASA FIRMS keeps tier 1 by name override: instrument data, not statements.
+- **Name overrides for track-record cases:** Russian MoD, TASS, RIA Novosti, SolovievLive,
+  Readovka → 3; BBC, Reuters, AFP, DW, RFE/RL, Meduza, Mediazona → 1.
+- **The note-pattern regex was matching praise as guilt:** plain `unverified` demoted Meduza
+  for *labelling* unverified claims, `no independent` demoted NATO for doing "no independent
+  battlefield reporting". Patterns are now phrase-specific (`amplif… unverified`,
+  `systematically unverified`, `wholly partisan`, `never as evidence`), and a new tier-2 cap
+  (`no independent verification`) grades honest pass-throughs (WarTranslated, CEPA/ECFR,
+  aggregator maps) without branding them disinformation. StopFake and Necro Mancer are
+  name-rescued from false positives.
+
+Catalogue distribution went 232/250/56 (T1/T2/T3) → 127/377/34. Applied to the live DB with
+`--no-enable-starters` (metadata refresh only, nobody's enabled flag touched). Existing claims
+confirmed while the MoD counted as tier-1 evidence were not re-adjudicated.
+
+Post-plan addition (user request): **stacked markers page through one popup**. With shapes the
+overlap problem became visible — several events at one settlement centroid stack their icons and
+only the top one was clickable. `onEventClick` now takes *all* features under the click (deduped
+by event id — GeoJSON sources are tiled internally and can report a feature twice), sorts them
+newest-first, and `openEventPopup()` renders a `‹ 2/13 ›` pager row that re-renders and re-wires
+the popup per step, following each item's own coordinates. `showOnMap()` feeds the same function
+a single pseudo-feature, which as a side effect fixed its previously-unwired star/original
+buttons.
