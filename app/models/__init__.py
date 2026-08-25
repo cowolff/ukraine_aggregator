@@ -28,12 +28,21 @@ from app.models.frontline import (  # noqa: F401
 from app.models.gazetteer import GazetteerEntry  # noqa: F401
 from app.models.news import LLM_STATUSES, NewsItem, content_hash  # noqa: F401
 from app.models.sources import PERSPECTIVES, SOURCE_TYPES, JSONType, Source  # noqa: F401
+from app.models.synthesis import (  # noqa: F401
+    CREDIBILITY_VERDICTS,
+    SYNTHESIS_LLM_STATUSES,
+    SYNTHESIS_STATUSES,
+    SynthesisMember,
+    SynthesizedReport,
+)
 
 __all__ = [
     "AdminUser", "AuditLog", "BlackoutZone", "Notification", "ExtractedEvent",
     "EvidenceLink", "FrontlineClaim", "FrontlineSnapshot", "UpstreamGeometry",
     "GazetteerEntry", "NewsItem", "Source", "content_hash",
+    "SynthesizedReport", "SynthesisMember",
     "PERSPECTIVES", "SOURCE_TYPES", "EVENT_TYPES", "EVENT_GLYPHS", "FRONTLINE_EVENT_TYPES",
     "COORD_SOURCES", "LLM_STATUSES", "CLAIM_DIRECTIONS", "CLAIM_STATUSES", "EVIDENCE_ROLES",
     "SNAPSHOT_LAYERS", "NOTIFICATION_LEVELS", "JSONType",
+    "SYNTHESIS_STATUSES", "SYNTHESIS_LLM_STATUSES", "CREDIBILITY_VERDICTS",
 ]

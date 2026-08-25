@@ -20,6 +20,7 @@ from app.models import (
     NewsItem,
     Notification,
     Source,
+    SynthesizedReport,
 )
 from app.services.audit import audit, current_actor
 from app.services.cache import invalidate, mark_frontline_dirty
@@ -566,3 +567,68 @@ def blackout_delete(zone_id: int):
     _invalidate_public()
     flash("Blackout zone deleted.", "ok")
     return redirect(url_for("admin.blackouts_list"))
+
+
+# --------------------------------------------------------------------------------------------
+# 7. synthesized reports (plans/SYNTHESIS.md)
+# --------------------------------------------------------------------------------------------
+@bp.get("/synthesis")
+@login_required
+def synthesis_list():
+    clauses, params = ["1=1"], {}
+    verdict = request.args.get("verdict")
+    if verdict:
+        clauses.append("r.credibility = :verdict")
+        params["verdict"] = verdict
+    status = request.args.get("llm_status")
+    if status:
+        clauses.append("r.llm_status = :status")
+        params["status"] = status
+    params["limit"] = 100
+    rows = db.session.execute(
+        text(
+            f"""
+            SELECT r.id, r.event_type, r.place_name, r.status, r.llm_status, r.llm_attempts,
+                   r.headline_en, r.credibility, r.cred_meta, r.member_count, r.visible,
+                   r.last_reported_at
+            FROM synthesized_reports r
+            WHERE {' AND '.join(clauses)}
+            ORDER BY r.last_reported_at DESC NULLS LAST, r.id DESC
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).mappings().all()
+    return render_template("synthesis.html", rows=rows, args=request.args)
+
+
+@bp.post("/synthesis/<int:report_id>/visible")
+@login_required
+def synthesis_toggle(report_id: int):
+    report = db.session.get(SynthesizedReport, report_id) or abort(404)
+    report.visible = not report.visible
+    audit(current_actor(), "synthesis.visibility", entity="synthesized_reports",
+          entity_id=str(report_id), detail={"visible": report.visible})
+    db.session.commit()
+    invalidate("api:synthesis")
+    return redirect(request.referrer or url_for("admin.synthesis_list"))
+
+
+@bp.post("/synthesis/<int:report_id>/resynthesize")
+@login_required
+def synthesis_rerun(report_id: int):
+    report = db.session.get(SynthesizedReport, report_id) or abort(404)
+    report.llm_status = "pending"
+    report.llm_attempts = 0
+    report.llm_claimed_at = None
+    audit(current_actor(), "synthesis.rerun", entity="synthesized_reports",
+          entity_id=str(report_id))
+    db.session.commit()
+    from celery_worker.tasks.synthesize import synthesize_reports_batch
+
+    try:
+        synthesize_reports_batch.delay(report_ids=[report_id])
+        flash("Re-synthesis queued.", "ok")
+    except Exception as exc:
+        flash(f"Marked pending; could not reach the broker ({exc}).", "warn")
+    return redirect(request.referrer or url_for("admin.synthesis_list"))

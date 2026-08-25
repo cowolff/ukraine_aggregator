@@ -9,6 +9,71 @@ from celery_worker.celery_app import celery
 from celery_worker.context import with_app_context
 
 
+def _release_stale_claims() -> dict:
+    """Free LLM-stage claims abandoned by a crashed or killed worker.
+
+    Does not commit; the caller owns the transaction. Runs on its own beat schedule (a dead
+    worker's claim must not wedge items until the nightly pass) and again inside nightly
+    maintenance as a backstop.
+    """
+    released = db.session.execute(
+        text(
+            "UPDATE news_items SET llm_status = 'pending', llm_claimed_at = NULL "
+            "WHERE llm_status = 'processing' "
+            "  AND (llm_claimed_at IS NULL "
+            "       OR llm_claimed_at < now() - make_interval(mins => :mins))"
+        ),
+        {"mins": settings.llm_claim_stale_minutes},
+    ).rowcount
+
+    translations_released = db.session.execute(
+        text(
+            "UPDATE news_items SET translation_status = 'pending', translation_claimed_at = NULL "
+            "WHERE translation_status = 'processing' "
+            "  AND (translation_claimed_at IS NULL "
+            "       OR translation_claimed_at < now() - make_interval(mins => :mins))"
+        ),
+        {"mins": settings.llm_claim_stale_minutes},
+    ).rowcount
+
+    summaries_released = db.session.execute(
+        text(
+            "UPDATE news_items SET summary_status = 'pending', summary_claimed_at = NULL "
+            "WHERE summary_status = 'processing' "
+            "  AND (summary_claimed_at IS NULL "
+            "       OR summary_claimed_at < now() - make_interval(mins => :mins))"
+        ),
+        {"mins": settings.llm_claim_stale_minutes},
+    ).rowcount
+
+    syntheses_released = db.session.execute(
+        text(
+            "UPDATE synthesized_reports SET llm_status = 'pending', llm_claimed_at = NULL "
+            "WHERE llm_status = 'processing' "
+            "  AND (llm_claimed_at IS NULL "
+            "       OR llm_claimed_at < now() - make_interval(mins => :mins))"
+        ),
+        {"mins": settings.llm_claim_stale_minutes},
+    ).rowcount
+
+    return {
+        "claims_released": released,
+        "translations_released": translations_released,
+        "summaries_released": summaries_released,
+        "syntheses_released": syntheses_released,
+    }
+
+
+@celery.task(name="tasks.release_stale_claims")
+@with_app_context
+def release_stale_claims() -> dict:
+    result = _release_stale_claims()
+    db.session.commit()
+    if any(result.values()):
+        log.info("release_stale_claims %s", result)
+    return result
+
+
 @celery.task(name="tasks.maintenance")
 @with_app_context
 def maintenance() -> dict:
@@ -67,42 +132,11 @@ def maintenance() -> dict:
         )
     ).rowcount
 
-    # Release extraction claims abandoned by a crashed or killed worker.
-    released = db.session.execute(
-        text(
-            "UPDATE news_items SET llm_status = 'pending', llm_claimed_at = NULL "
-            "WHERE llm_status = 'processing' "
-            "  AND (llm_claimed_at IS NULL "
-            "       OR llm_claimed_at < now() - make_interval(mins => :mins))"
-        ),
-        {"mins": settings.llm_claim_stale_minutes},
-    ).rowcount
-
-    translations_released = db.session.execute(
-        text(
-            "UPDATE news_items SET translation_status = 'pending', translation_claimed_at = NULL "
-            "WHERE translation_status = 'processing' "
-            "  AND (translation_claimed_at IS NULL "
-            "       OR translation_claimed_at < now() - make_interval(mins => :mins))"
-        ),
-        {"mins": settings.llm_claim_stale_minutes},
-    ).rowcount
-
-    summaries_released = db.session.execute(
-        text(
-            "UPDATE news_items SET summary_status = 'pending', summary_claimed_at = NULL "
-            "WHERE summary_status = 'processing' "
-            "  AND (summary_claimed_at IS NULL "
-            "       OR summary_claimed_at < now() - make_interval(mins => :mins))"
-        ),
-        {"mins": settings.llm_claim_stale_minutes},
-    ).rowcount
+    released = _release_stale_claims()
 
     db.session.commit()
     result = {
-        "claims_released": released,
-        "translations_released": translations_released,
-        "summaries_released": summaries_released,
+        **released,
         "snapshots_pruned": pruned,
         "upstream_pruned": upstream_pruned,
         "audit_pruned": audit_pruned,

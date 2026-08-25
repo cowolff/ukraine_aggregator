@@ -1224,6 +1224,112 @@ async function refreshRail() {
   } catch { /* transient; the next tick retries */ }
 }
 
+/* ------------------------------------------------------------------ synthesized reports
+   Cross-source syntheses pinned above the rail (plans/SYNTHESIS.md): the pipeline's own words,
+   visually distinct from source reporting. The credibility badge is code-derived — the tooltip
+   shows its inputs. The block ignores the rail tier filter on purpose: the verdict already
+   encodes tier, and hiding an "unverified" warning from a tier-1 reader defeats the point. */
+const SYNTH_PAGE = 10;
+
+function synthVerdict(cred) {
+  switch (cred.verdict) {
+    case 'confirmed':
+      return {glyph: '●', label: 'Confirmed — independent perspectives agree'};
+    case 'corroborated':
+      return {
+        glyph: '◐',
+        label: (cred.classes || []).length >= 2
+          ? 'Corroborated — multiple perspectives'
+          : 'Corroborated — multiple outlets, one side',
+      };
+    case 'reported':
+      return {glyph: '○', label: 'Reported — not independently confirmed'};
+    default:
+      return {glyph: '◌', label: 'Unverified — low-reliability channels only'};
+  }
+}
+
+function synthTooltip(cred) {
+  const tiers = Object.entries(cred.tiers || {})
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([tier, n]) => `${n}× tier ${tier}`).join(', ');
+  const classes = (cred.classes || []).join(' + ');
+  return `${cred.sources} source${cred.sources === 1 ? '' : 's'}: ${tiers}`
+    + (classes ? `; ${classes} perspective${(cred.classes || []).length === 1 ? '' : 's'}` : '');
+}
+
+function synthesisURL() {
+  const params = new URLSearchParams({limit: String(SYNTH_PAGE)});
+  // Same window as the rail: past syntheses over a past map.
+  if (isHistorical()) {
+    params.set('from', new Date(State.at.getTime() - State.rangeHours * HOUR_MS).toISOString());
+    params.set('to', State.at.toISOString());
+  }
+  return `/api/synthesis?${params}`;
+}
+
+function synthRow(item) {
+  const li = document.createElement('li');
+  li.className = `synth v-${escapeHTML(item.credibility.verdict || 'unverified')}`;
+  const verdict = synthVerdict(item.credibility);
+  const glyph = (State.config?.glyphs || {})[item.event_type] || '·';
+  const typeLabel = String(item.event_type || '').replace(/_/g, ' ');
+  const members = item.members || [];
+  const memberRows = members.map((m) => {
+    const title = escapeHTML(m.title || '(untitled)');
+    const link = m.url
+      ? `<a href="${escapeHTML(m.url)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+      : title;
+    return `<li><span class="chip">tier ${escapeHTML(String(m.tier))}</span>
+        <span class="pill p-${escapeHTML(m.perspective)}">${escapeHTML(m.perspective)}</span>
+        <span class="source">${escapeHTML(m.source)}</span>${m.disputes
+      ? ' <span class="synth-disputed">disputes</span>' : ''} — ${link}</li>`;
+  }).join('');
+  li.innerHTML = `
+    <div class="synth-head">
+      <span class="synth-badge" title="${escapeHTML(synthTooltip(item.credibility))}">
+        ${verdict.glyph} ${escapeHTML(verdict.label)}</span>
+      ${item.credibility.disputed ? '<span class="synth-disputed">⚠ disputed</span>' : ''}
+    </div>
+    <div class="synth-meta">
+      <span class="glyph">${glyph}</span> ${escapeHTML(typeLabel)}
+      ${item.place ? ` · ${escapeHTML(item.place)}` : ''}
+      · <span class="when">${relativeTime(item.last_reported_at)}</span>
+    </div>
+    <h3>${escapeHTML(item.headline || '(untitled synthesis)')}</h3>
+    <p class="snippet">${escapeHTML(item.summary || '')}</p>
+    ${item.disagreements
+      ? `<p class="synth-disagreements">▸ Disagreements: ${escapeHTML(item.disagreements)}</p>`
+      : ''}
+    <details class="synth-members">
+      <summary>Based on ${members.length} report${members.length === 1 ? '' : 's'}</summary>
+      <ul>${memberRows}</ul>
+    </details>`;
+  const show = document.createElement('button');
+  show.className = 'show-map';
+  show.textContent = '⌖ Show on map';
+  show.addEventListener('click', () => {
+    switchTab('map');
+    // Plain camera move — needs no loaded() gate. Gating on map.loaded() here was a dead end:
+    // it is false whenever a repaint is pending (the resize in switchTab, the 90 s events
+    // refresh), and the 'load' event it would then wait for only ever fires once, at boot.
+    if (map) map.flyTo({center: item.centroid, zoom: 11, duration: 900});
+  });
+  li.append(show);
+  return li;
+}
+
+async function loadSynthesis({poll = false} = {}) {
+  try {
+    const {data, unchanged} = await getJSON(synthesisURL(), {useEtag: poll});
+    if (poll && (unchanged || !data)) return;
+    const list = $('synth-list');
+    list.innerHTML = '';
+    for (const item of (data.items || [])) list.append(synthRow(item));
+    $('synth-block').hidden = list.children.length === 0;
+  } catch { /* transient; the block keeps its last content and the next tick retries */ }
+}
+
 function showOnMap(event, item) {
   switchTab('map');
   const jump = () => {
@@ -1328,6 +1434,7 @@ function setInstant(date, {fromSlider = false} = {}) {
   refreshFrontline();
   refreshEvents();
   loadRail({reset: true});
+  loadSynthesis();
 }
 
 function stepInstant(hours) {
@@ -1485,6 +1592,7 @@ async function boot() {
   repaintSaved();
 
   loadRail({reset: true});
+  loadSynthesis();
   $('news-rail-body').addEventListener('scroll', () => {
     const el = $('news-rail-body');
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 300) loadRail();
@@ -1545,6 +1653,7 @@ async function boot() {
     refreshFrontline();
     refreshEvents();
     refreshRail();
+    loadSynthesis({poll: true});
     refreshNotifications();
   }, period);
   // Keep the scrubber's bounds current as new data arrives.

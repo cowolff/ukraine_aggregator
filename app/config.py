@@ -129,6 +129,23 @@ class Settings:
     gazetteer_min_similarity: float = field(
         default_factory=lambda: _env("GAZETTEER_MIN_SIMILARITY", 0.55)
     )
+    # --- cross-source synthesis (plans/SYNTHESIS.md) --------------------------------------------
+    # Member-to-report join radius. Deliberately tighter than CLAIM_JOIN_KM: same-type events a
+    # day apart within 3 km are one story, while two frontline claims 5 km apart may legitimately
+    # be one push and two towns.
+    synth_join_km: float = field(default_factory=lambda: _env("SYNTH_JOIN_KM", 3.0))
+    # Distinct sources required before a cluster is worth an LLM synthesis pass.
+    synth_min_sources: int = field(default_factory=lambda: _env("SYNTH_MIN_SOURCES", 3))
+    # Join window and auto-close horizon: a report stops accepting members this long after its
+    # last one, so recurrent shelling of one city yields roughly one synthesis per active day.
+    synth_window_hours: float = field(default_factory=lambda: _env("SYNTH_WINDOW_HOURS", 24.0))
+    # New members before an already-synthesized report is re-synthesized (hysteresis, so a hot
+    # cluster does not burn a prompt per repost). A debunk joining always forces a re-pass.
+    synth_refresh_min_new: int = field(default_factory=lambda: _env("SYNTH_REFRESH_MIN_NEW", 3))
+    # Prompt cap: members are sampled best-tier-first across perspective classes.
+    synth_max_members_in_prompt: int = field(
+        default_factory=lambda: _env("SYNTH_MAX_MEMBERS_IN_PROMPT", 12)
+    )
     llm_batch_size: int = field(default_factory=lambda: _env("LLM_BATCH_SIZE", 8))
     llm_max_retries: int = field(default_factory=lambda: _env("LLM_MAX_RETRIES", 3))
     llm_max_body_chars: int = field(default_factory=lambda: _env("LLM_MAX_BODY_CHARS", 4000))
@@ -155,6 +172,15 @@ class Settings:
     poll_queue_max: int = field(default_factory=lambda: _env("POLL_QUEUE_MAX", 120))
     llm_claim_stale_minutes: int = field(
         default_factory=lambda: _env("LLM_CLAIM_STALE_MINUTES", 30)
+    )
+    # Celery task time limits. Shared through settings because the LLM client sizes its in-call
+    # retry budget against the soft limit: a task must finish (or fail) its proxy call with enough
+    # headroom left to run its own error handling before Celery interrupts it.
+    celery_task_soft_time_limit: int = field(
+        default_factory=lambda: _env("CELERY_TASK_SOFT_TIME_LIMIT", 600)
+    )
+    celery_task_time_limit: int = field(
+        default_factory=lambda: _env("CELERY_TASK_TIME_LIMIT", 900)
     )
     # Total context window. Discovered from the proxy's /models when it reports it; this is the
     # fallback and the ceiling. Input and output share it, so a batch must be sized to fit both.

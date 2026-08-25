@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import datetime as dt
 
+import httpx
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import text
 
 from app.extensions import db
@@ -224,6 +226,29 @@ class TestPersistence:
         assert event.claimed_by is None
         assert event.confidence is None
 
+    def test_location_country_is_persisted(self, make_source):
+        # Shared-name trap: Pokrovsk exists in Donetsk oblast AND in Rostov region (RU). The
+        # extractor's country call is what later stops the geocoder from pinning RU events in UA.
+        item = self._item(make_source("russian"))
+        _persist(item, {
+            "relevant": True, "event_type": "deep_strike", "confidence": 0.9,
+            "locations": [{"name": "Покровск", "oblast": None, "country": "ru"}],
+        })
+        assert self.events_for(item)[0].llm_raw["country"] == "ru"
+
+    def test_country_word_forms_and_garbage_are_coerced(self, make_source):
+        item = self._item(make_source("western"))
+        _persist(item, {
+            "relevant": True, "event_type": "shelling", "confidence": 0.7,
+            "locations": [
+                {"name": "Belgorod", "country": "Russia"},   # word form → code
+                {"name": "Kharkiv", "country": "UA"},        # case-folded
+                {"name": "Sumy", "country": "Mars"},         # unrecognized → unknown, not a guess
+            ],
+        })
+        countries = {e.place_name_raw: e.llm_raw["country"] for e in self.events_for(item)}
+        assert countries == {"Belgorod": "ru", "Kharkiv": "ua", "Sumy": None}
+
     def test_malformed_locations_do_not_crash(self, make_source):
         item = self._item(make_source("western"))
         created = _persist(item, {
@@ -280,6 +305,42 @@ class TestBatchTask:
         assert "error" in result
         row = db.session.execute(text("SELECT llm_status, llm_attempts FROM news_items")).first()
         assert row.llm_status == "pending" and row.llm_attempts == 1
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            llm.LLMTransient("proxy 503"),
+            httpx.ConnectError("connection refused"),
+            # A hanging backend surfaces as the soft time limit, not as an HTTP error.
+            SoftTimeLimitExceeded(),
+        ],
+    )
+    def test_transient_failure_spends_no_attempt(self, make_source, monkeypatch, exc):
+        """An outage must not burn the attempt cap, which exists to retire poison items.
+
+        Regression test: a few hours of dead proxy used to march every pending item to a terminal
+        'failed' (attempts spent on connection errors), leaving a permanent extraction hole for
+        the outage window once the endpoint came back.
+        """
+        source = make_source("russian")
+        db.session.add(
+            NewsItem(
+                source_id=source.id, content_hash=content_hash("Assault", "body"),
+                title="Assault on Chasiv Yar", body="shelling reported", llm_status="pending",
+            )
+        )
+        db.session.commit()
+        monkeypatch.setattr(llm, "extract_batch", lambda _i: (_ for _ in ()).throw(exc))
+
+        for _ in range(5):  # well past MAX_LLM_ATTEMPTS
+            result = llm_extract_batch()
+            assert "error" in result
+        row = db.session.execute(
+            text("SELECT llm_status, llm_attempts, llm_claimed_at FROM news_items")
+        ).first()
+        assert row.llm_status == "pending", "the item must stay claimable for after the outage"
+        assert row.llm_attempts == 0
+        assert row.llm_claimed_at is None
 
     def test_items_fail_permanently_after_max_attempts(self, make_source, monkeypatch):
         source = make_source("russian")
@@ -432,5 +493,122 @@ class TestBatchTask:
         assert statuses[ids[0]] == "pending", "an abandoned claim must be released"
         assert statuses[ids[1]] == "processing", "a live claim must be left alone"
 
+    def test_periodic_reaper_frees_stale_claims_between_nightly_passes(self, make_source):
+        """The standalone reaper task must free a dead worker's claim within minutes; waiting for
+        nightly maintenance would wedge the items for up to a day."""
+        from celery_worker.celery_app import celery
+        from celery_worker.tasks.maintenance import release_stale_claims
+
+        assert "release-stale-claims" in celery.conf.beat_schedule
+
+        source = make_source("russian")
+        item = NewsItem(
+            source_id=source.id, content_hash=content_hash("Stale claim", "body"),
+            title="Assault on settlement", body="advance reported", llm_status="processing",
+        )
+        db.session.add(item)
+        db.session.flush()
+        db.session.execute(
+            text("UPDATE news_items SET llm_claimed_at = now() - interval '2 hours' WHERE id = :i"),
+            {"i": item.id},
+        )
+        db.session.commit()
+
+        result = release_stale_claims()
+        assert result["claims_released"] == 1
+        db.session.expire_all()
+        assert db.session.get(NewsItem, item.id).llm_status == "pending"
+
     def test_empty_queue_is_a_no_op(self):
         assert llm_extract_batch() == {"batch": 0, "skipped": 0}
+
+
+class TestProxyErrorClassification:
+    """_post must sort proxy answers into outage-shaped (LLMTransient) vs batch-shaped errors."""
+
+    class _Resp:
+        def __init__(self, status_code, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    def _post_with(self, monkeypatch, status, text=""):
+        resp = self._Resp(status, text)
+
+        class StubClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def post(self, url, content=None):
+                return resp
+
+        monkeypatch.setattr(llm, "_client", lambda: StubClient())
+        return lambda: llm._post({"model": "test-model", "messages": []})
+
+    @pytest.mark.parametrize(
+        "status,body",
+        [
+            (400, "Invalid model name passed in model=qwen3. Call /model/info"),
+            (400, "No deployments available for selected model"),
+            (400, "LLM Provider NOT provided. Pass in the LLM provider"),
+            (404, '{"error":{"message":"litellm.NotFoundError: anything"}}'),
+            (400, "litellm.BadRequestError: model gpt-x does not exist"),
+        ],
+    )
+    def test_config_shaped_4xx_is_transient(self, monkeypatch, status, body):
+        """A decommissioned/renamed model fails every batch instantly with a 4xx; counting that
+        against per-item attempt caps would replay a full outage burn at top speed."""
+        with pytest.raises(llm.LLMTransient):
+            self._post_with(monkeypatch, status, body)()
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "response_format is not supported by this model",
+            "unexpected keyword argument reasoning_effort",
+            "1 validation error for Request body",
+        ],
+    )
+    def test_capability_4xx_stays_hard_so_degrade_paths_still_fire(self, monkeypatch, body):
+        with pytest.raises(llm.LLMError) as err:
+            self._post_with(monkeypatch, 400, body)()
+        assert not isinstance(err.value, llm.LLMTransient)
+
+    def test_retry_budget_leaves_headroom_under_the_soft_limit(self):
+        """In-call retries must stop early enough that one final full-timeout attempt plus the
+        task's own error handling still fits under Celery's soft time limit."""
+        from app.config import settings
+
+        assert (
+            llm._RETRY_DELAY_BUDGET_S + settings.llm_timeout_s
+            < settings.celery_task_soft_time_limit
+        )
+
+
+class TestContextWindow:
+    def test_failed_limit_lookup_is_not_cached(self, monkeypatch):
+        """A worker whose first batch lands mid-outage must not lock in the fallback window for
+        the life of the process — the next call asks the proxy again."""
+        from app.config import settings
+
+        llm._LIMITS_CACHE.clear()
+        calls = {"n": 0}
+
+        class DeadProxy:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def get(self, url):
+                calls["n"] += 1
+                raise httpx.ConnectError("connection refused")
+
+        monkeypatch.setattr(llm, "_client", lambda: DeadProxy())
+        assert llm.context_window() == settings.llm_context_tokens
+        assert settings.litellm_model not in llm._LIMITS_CACHE
+        assert llm.context_window() == settings.llm_context_tokens
+        assert calls["n"] == 2, "the second call must ask the proxy again, not reuse a failure"

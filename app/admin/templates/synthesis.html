@@ -1,0 +1,45 @@
+{% extends "base.html" %}{% block title %}Synthesis{% endblock %}
+{% block body %}
+<h1>Synthesized reports</h1>
+<p class="muted">Cross-source clusters (plans/SYNTHESIS.md). The credibility verdict is computed
+  from the member sources' tiers and perspective classes, never by the model; <code>cred_meta</code>
+  holds its inputs. Only <code>llm_status = done</code> rows are public.</p>
+<form class="filters" method="get">
+  <div><label>Verdict</label><select name="verdict"><option value="">any</option>
+    {% for v in ['confirmed','corroborated','reported','unverified'] %}
+    <option value="{{ v }}" {{ 'selected' if args.get('verdict')==v }}>{{ v }}</option>{% endfor %}</select></div>
+  <div><label>LLM status</label><select name="llm_status"><option value="">any</option>
+    {% for s in ['pending','processing','done','failed'] %}
+    <option value="{{ s }}" {{ 'selected' if args.get('llm_status')==s }}>{{ s }}</option>{% endfor %}</select></div>
+  <button class="primary">Filter</button>
+</form>
+<div class="scroll"><table>
+<tr><th>#</th><th>Headline</th><th>Type · place</th><th>Verdict</th><th>Members</th>
+  <th>Window</th><th>LLM</th><th>Visible</th><th>Actions</th></tr>
+{% for r in rows %}
+<tr>
+  <td class="muted">{{ r.id }}</td>
+  <td>{{ (r.headline_en or '(not yet synthesized)')|truncate(80) }}</td>
+  <td>{{ r.event_type }}{% if r.place_name %} · {{ r.place_name }}{% endif %}
+      <br><span class="muted">{{ r.status }}</span></td>
+  <td>{% if r.credibility %}<code>{{ r.credibility }}</code>
+      <br><span class="muted">{{ r.cred_meta.get('sources', 0) }} src ·
+        best tier {{ r.cred_meta.get('best_tier', '—') }}{% if r.cred_meta.get('disputed') %} ·
+        ⚠ disputed{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+  <td>{{ r.member_count }}</td>
+  <td class="muted">{{ r.last_reported_at.strftime('%Y-%m-%d %H:%M') if r.last_reported_at }}</td>
+  <td><code>{{ r.llm_status or 'unarmed' }}</code>
+      {% if r.llm_attempts %}<span class="muted">({{ r.llm_attempts }})</span>{% endif %}</td>
+  <td>{{ '✔' if r.visible else '—' }}</td>
+  <td>
+    <form method="post" action="{{ url_for('admin.synthesis_toggle', report_id=r.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button>{{ 'hide' if r.visible else 'unhide' }}</button></form>
+    <form method="post" action="{{ url_for('admin.synthesis_rerun', report_id=r.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>re-synthesize</button></form>
+  </td>
+</tr>
+{% else %}<tr><td colspan="9" class="muted">No clusters yet — they appear once several sources
+  report the same event.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

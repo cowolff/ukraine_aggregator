@@ -49,12 +49,19 @@ def dispatch_llm() -> dict:
               -- claimable yet, so counting it would waste a slot on an empty batch.
               (SELECT count(*) FROM news_items
                 WHERE summary_status IN ('pending','failed')
-                  AND llm_status NOT IN ('pending','processing')) AS summarize_pending
+                  AND llm_status NOT IN ('pending','processing')) AS summarize_pending,
+              -- Armed synthesized reports (plans/SYNTHESIS.md). Volume is tiny — clusters, not
+              -- items — but it must be in the split so a translation backlog cannot starve it.
+              (SELECT count(*) FROM synthesized_reports
+                WHERE llm_status IN ('pending','failed') AND llm_attempts < 3) AS synthesize_reports_pending
             """
         )
     ).mappings().first()
 
-    pending = {kind: int(counts[f"{kind}_pending"]) for kind in ("extract", "translate", "summarize")}
+    pending = {
+        kind: int(counts[f"{kind}_pending"])
+        for kind in ("extract", "translate", "summarize", "synthesize_reports")
+    }
     total = sum(pending.values())
     if total == 0:
         return {"queued": 0, "depth": depth, "reason": "nothing pending"}
@@ -63,10 +70,11 @@ def dispatch_llm() -> dict:
 
     from celery_worker.tasks.extract import llm_extract_batch
     from celery_worker.tasks.summarize import summarize_batch
+    from celery_worker.tasks.synthesize import synthesize_reports_batch
     from celery_worker.tasks.translate import translate_batch
 
     tasks = {"extract": llm_extract_batch, "translate": translate_batch,
-             "summarize": summarize_batch}
+             "summarize": summarize_batch, "synthesize_reports": synthesize_reports_batch}
     for kind, task in tasks.items():
         for _ in range(slots[kind]):
             task.apply_async(queue=LLM_QUEUE)

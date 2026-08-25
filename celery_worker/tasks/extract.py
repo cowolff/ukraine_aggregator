@@ -95,17 +95,28 @@ def llm_extract_batch(item_ids: list[int] | None = None) -> dict:
                  len(batch), len(payload))
         for item in batch[len(payload):]:
             item.llm_status = "pending"      # release the claim on items that did not fit
+            item.llm_claimed_at = None
         db.session.commit()
         batch = batch[: len(payload)]
 
     try:
         results = llm.extract_batch(payload)
     except Exception as exc:
+        # Attempts exist to retire poison items, not to count outages: a transient failure
+        # (proxy down/overloaded/unreachable) releases the claim without spending one, so the
+        # backlog extracts itself once the endpoint is back.
+        transient = llm.is_transient(exc)
         for item in batch:
-            item.llm_attempts += 1
-            item.llm_status = "failed" if item.llm_attempts >= MAX_LLM_ATTEMPTS else "pending"
+            if transient:
+                item.llm_status = "pending"
+            else:
+                item.llm_attempts += 1
+                item.llm_status = "failed" if item.llm_attempts >= MAX_LLM_ATTEMPTS else "pending"
+            item.llm_claimed_at = None
         db.session.commit()
-        log.warning("extraction batch failed: %s: %s", type(exc).__name__, exc)
+        log.warning("extraction batch failed%s: %s: %s",
+                    " (transient, no attempt spent)" if transient else "",
+                    type(exc).__name__, exc)
         return {"batch": len(batch), "error": str(exc)[:200], "skipped": skipped}
 
     created = 0
@@ -153,7 +164,7 @@ def _persist(item: NewsItem, result: dict) -> int:
     if not isinstance(locations, list):
         locations = []
 
-    rows: list[tuple[str | None, float | None, float | None, str | None]] = []
+    rows: list[tuple[str | None, float | None, float | None, str | None, str | None]] = []
     for i, location in enumerate(locations):
         if not isinstance(location, dict):
             continue
@@ -164,18 +175,18 @@ def _persist(item: NewsItem, result: dict) -> int:
             lat, lon = regex_coords[min(i, len(regex_coords) - 1)]
         if not in_ukraine_bbox(lat, lon):
             lat, lon = None, None  # outside the sanity bbox → treat as name-only
-        rows.append((name, lat, lon, location.get("oblast")))
+        rows.append((name, lat, lon, location.get("oblast"), _coerce_country(location.get("country"))))
 
     if not rows:
         if regex_coords:
-            rows = [(None, regex_coords[0][0], regex_coords[0][1], None)]
+            rows = [(None, regex_coords[0][0], regex_coords[0][1], None, None)]
         else:
-            rows = [(None, None, None, None)]  # relevant but unplaced → feed-only item
+            rows = [(None, None, None, None, None)]  # relevant but unplaced → feed-only item
 
     # The model routinely repeats a location within one response — one daily-summary item returned
     # the same empty location 18 times. Identical rows would become identical events: redundant on
     # the map and redundant as evidence on a claim.
-    deduped: list[tuple[str | None, float | None, float | None, str | None]] = []
+    deduped: list[tuple[str | None, float | None, float | None, str | None, str | None]] = []
     seen_rows: set[tuple] = set()
     for row in rows:
         key = (
@@ -195,7 +206,7 @@ def _persist(item: NewsItem, result: dict) -> int:
     occurred_at = item.published_at or item.fetched_at
 
     created = 0
-    for name, lat, lon, oblast in rows:
+    for name, lat, lon, oblast, country in rows:
         event = ExtractedEvent(
             news_item_id=item.id,
             event_type=event_type,
@@ -206,6 +217,7 @@ def _persist(item: NewsItem, result: dict) -> int:
             llm_raw={
                 "event_type": event_type,
                 "oblast": oblast,
+                "country": country,
                 "debunk_target": result.get("debunk_target"),
                 "raw_confidence": result.get("confidence"),
             },
@@ -231,3 +243,18 @@ def _coerce_coords(lat, lon) -> tuple[float | None, float | None]:
         return float(lat), float(lon)
     except (TypeError, ValueError):
         return None, None
+
+
+# The prompt asks for codes, but the model sometimes answers in words; both fold to the code.
+# Anything unrecognized becomes None (= country unknown), never a guess.
+_COUNTRY_CODES = {"ua", "ru", "by", "md", "other"}
+_COUNTRY_WORDS = {"ukraine": "ua", "russia": "ru", "belarus": "by", "moldova": "md"}
+
+
+def _coerce_country(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    key = value.strip().lower()
+    if key in _COUNTRY_CODES:
+        return key
+    return _COUNTRY_WORDS.get(key)

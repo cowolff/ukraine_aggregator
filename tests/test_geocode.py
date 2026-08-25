@@ -257,3 +257,58 @@ class TestGeocodeTask:
         assert row.resolution == "hinted"
         assert row.hint == "Donetsk"
         assert row.similarity == pytest.approx(1.0)
+
+    def test_foreign_country_event_is_never_gazetteer_matched(self, gazetteer, make_source, make_event):
+        """The shared-name trap: Pokrovsk exists in Donetsk oblast AND in Rostov region (RU).
+
+        The name alone matches the gazetteer perfectly, so only the extractor's country call can
+        keep a Russian event off the Ukrainian map.
+        """
+        import json
+
+        from sqlalchemy import text
+
+        from app.extensions import db
+        from celery_worker.tasks.geocode import geocode_pending
+
+        event = make_event(make_source("russian"), lat=None, lon=None)
+        db.session.execute(
+            text(
+                "UPDATE extracted_events SET place_name_raw='Покровск', "
+                "llm_raw=CAST(:raw AS jsonb) WHERE id=:i"
+            ),
+            {"i": event.id, "raw": json.dumps({"oblast": None, "country": "ru"})},
+        )
+        db.session.commit()
+        stats = geocode_pending()
+        assert stats["foreign"] >= 1
+        row = db.session.execute(
+            text("SELECT geom, gazetteer_id FROM extracted_events WHERE id=:i"),
+            {"i": event.id},
+        ).first()
+        assert row.geom is None and row.gazetteer_id is None
+
+    def test_missing_country_keeps_the_old_behaviour(self, gazetteer, make_source, make_event):
+        # Events extracted before the country field existed (or where the LLM was unsure) must
+        # still geocode exactly as before.
+        import json
+
+        from sqlalchemy import text
+
+        from app.extensions import db
+        from celery_worker.tasks.geocode import geocode_pending
+
+        event = make_event(make_source("western"), lat=None, lon=None)
+        db.session.execute(
+            text(
+                "UPDATE extracted_events SET place_name_raw='Покровськ', "
+                "llm_raw=CAST(:raw AS jsonb) WHERE id=:i"
+            ),
+            {"i": event.id, "raw": json.dumps({"oblast": None})},
+        )
+        db.session.commit()
+        geocode_pending()
+        row = db.session.execute(
+            text("SELECT gazetteer_id FROM extracted_events WHERE id=:i"), {"i": event.id}
+        ).first()
+        assert row.gazetteer_id is not None

@@ -32,6 +32,7 @@ os.environ.setdefault("LITELLM_MODEL", "test-model")
 os.environ.setdefault("LITELLM_API_KEY", "test-key")
 
 TABLES = [
+    "synthesis_members", "synthesized_reports",
     "evidence_links", "frontline_claims", "frontline_snapshots", "upstream_geometries",
     "extracted_events", "news_items", "sources", "gazetteer", "blackout_zones",
     "notifications", "audit_log", "admin_users",
@@ -126,6 +127,18 @@ def clean_db(app, app_context):
         pass
     yield
     db.session.rollback()
+
+
+@pytest.fixture(autouse=True)
+def _seed_llm_limits(app):
+    """context_window() deliberately does not cache a failed proxy lookup any more, so without
+    this seed every batch task test would dial proxy.invalid for the model limits."""
+    from app.config import settings
+    from app.services import llm
+
+    llm._LIMITS_CACHE[settings.litellm_model] = settings.llm_context_tokens
+    yield
+    llm._LIMITS_CACHE.clear()
 
 
 @pytest.fixture

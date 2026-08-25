@@ -19,6 +19,7 @@ celery = Celery(
         "celery_worker.tasks.extract",
         "celery_worker.tasks.translate",
         "celery_worker.tasks.summarize",
+        "celery_worker.tasks.synthesize",
         "celery_worker.tasks.dispatch",
         "celery_worker.tasks.geocode",
         "celery_worker.tasks.rules",
@@ -45,8 +46,8 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
     broker_connection_retry_on_startup=True,
-    task_soft_time_limit=600,
-    task_time_limit=900,
+    task_soft_time_limit=settings.celery_task_soft_time_limit,
+    task_time_limit=settings.celery_task_time_limit,
     beat_schedule={
         "dispatch-polls": {"task": "tasks.dispatch_polls", "schedule": 60.0},
         # One dispatcher keeps the llm queue fed for both extraction and translation; firing a
@@ -54,6 +55,12 @@ celery.conf.update(
         "dispatch-llm": {"task": "tasks.dispatch_llm", "schedule": 30.0},
         "geocode-pending": {"task": "tasks.geocode_pending", "schedule": 120.0},
         "evaluate-claims": {"task": "tasks.evaluate_claims", "schedule": 300.0},
+        # Offset from evaluate-claims so the two correlation passes do not always collide.
+        "cluster-synthesis": {
+            "task": "tasks.cluster_synthesis",
+            "schedule": 300.0,
+            "options": {"countdown": 90},
+        },
         "rebuild-frontline": {"task": "tasks.rebuild_frontline", "schedule": 300.0},
         "rebuild-frontline-nightly": {
             "task": "tasks.rebuild_frontline",
@@ -68,6 +75,9 @@ celery.conf.update(
             "schedule": crontab(hour=4, minute=0),
         },
         "maintenance": {"task": "tasks.maintenance", "schedule": crontab(hour=2, minute=15)},
+        # A dead worker's 'processing' claim must not wedge items until the nightly pass; the
+        # staleness threshold (LLM_CLAIM_STALE_MINUTES) still protects live batches.
+        "release-stale-claims": {"task": "tasks.release_stale_claims", "schedule": 600.0},
     },
 )
 

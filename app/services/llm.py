@@ -10,10 +10,12 @@ from typing import Any
 
 import httpx
 import orjson
+from celery.exceptions import SoftTimeLimitExceeded
 from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
+    stop_after_delay,
     wait_exponential,
 )
 
@@ -34,8 +36,13 @@ Per item fields:
    * geolocation_proof: the item itself presents verified imagery/coordinates proving a position
    * debunk: the item argues that earlier footage/geolocation was fake, staged or AI-generated
 - "locations": array of {"name": string or null, "lat": number or null, "lon": number or null,
-   "oblast": string or null} — extract EVERY named settlement; parse coordinates if literally
-   present in the text; NEVER invent coordinates for a name.
+   "oblast": string or null, "country": string or null} — extract EVERY named settlement; parse
+   coordinates if literally present in the text; NEVER invent coordinates for a name.
+   * "country": the country the place itself is in — "ua", "ru", "by", "md", "other" — or null
+     only when the article gives no way to tell. Many settlement names exist in BOTH Ukraine and
+     Russia (Pokrovsk, Nikolske, Krasnodon...): decide from context — the region/oblast named,
+     whose territory it is, what is being struck. A Ukrainian drone strike on a Russian refinery
+     is "ru" even though the item is about the war in Ukraine.
    * "oblast": the Ukrainian oblast the place is in, exactly one of: "donetsk","luhansk",
      "zaporizhzhia","kherson","kharkiv","dnipropetrovsk","sumy","chernihiv","mykolaiv","odesa",
      "kyiv","poltava","kirovohrad","cherkasy","vinnytsia","zhytomyr","rivne","volyn","lviv",
@@ -72,6 +79,28 @@ Rules:
 - A location summary is about that place alone; keep item-wide context in the general "summary".
 - Never invent, merge or drop locations: echo back exactly the names given, no more, no fewer."""
 
+SYNTHESIS_PROMPT = """You merge several news reports about ONE event of the war in Ukraine into a single English report.
+Each input item is one event: its type, place, a credibility verdict computed from the sources'
+reliability tiers (1 = most reliable, 3 = least), and the individual reports with their source,
+perspective and tier. Respond with {"items": [...]} only, no prose.
+Per input item return one object:
+- "idx": the input index (integer, echo it back)
+- "headline": one short English headline for the merged report (under 100 characters)
+- "summary": 3-6 English sentences merging what the reports say happened
+- "disagreements": string or null — where the accounts conflict (casualty counts, attribution,
+  weapon type, extent), stated as the spread; null when the accounts agree
+Rules:
+- Always write English, whatever the language of the inputs.
+- Attribute every load-bearing claim to a perspective ("Ukrainian outlets report...", "Russian
+  channels claim...", "Western coverage says..."). Never present one side's claim as settled fact.
+- Weight your wording by the given verdict and tiers: "confirmed"/tier-1 sourcing may be stated
+  plainly; claims carried only by tier-3 sources must read as unconfirmed ("so far reported only
+  by low-reliability channels"). Echo the verdict's caution in the summary's final sentence.
+- Never resolve a numeric disagreement by picking a side or averaging: state the spread in
+  "disagreements".
+- A report marked "disputes": true argues the event is fake or misattributed — say so.
+- Summarise only what the reports themselves say; never add outside knowledge or speculation."""
+
 _RELEVANCE_RE = re.compile("|".join(RELEVANCE_PATTERNS), re.IGNORECASE)
 _CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
@@ -99,6 +128,29 @@ class LLMTransient(LLMError):
     """429 / 5xx / network — worth retrying."""
 
 
+def is_transient(exc: BaseException) -> bool:
+    """Outage-shaped failure: the proxy is down, overloaded, unreachable — or so slow that Celery
+    interrupted the task (a hanging backend surfaces as SoftTimeLimitExceeded, not as an HTTP
+    error, when the soft limit fires mid-call).
+
+    The batch content is innocent in these cases, so callers with per-item attempt caps must not
+    spend an attempt on them — a multi-hour outage would otherwise burn every pending item to a
+    terminal 'failed' and leave a permanent hole once the proxy comes back.
+    """
+    return isinstance(exc, (LLMTransient, httpx.TransportError, SoftTimeLimitExceeded))
+
+
+# 4xx bodies that mean the proxy's *routing* is broken — the model was renamed, removed, or has no
+# live deployment — rather than anything about the batch. These fail instantly for every batch, so
+# counting them against per-item attempt caps would replay a full outage burn at top speed; they
+# are outage-shaped and retrying after the config is fixed succeeds. The spellings are LiteLLM's.
+_CONFIG_4XX_RE = re.compile(
+    r"invalid model name|no deployments available|llm provider not provided|unknown model"
+    r"|model\b.{0,120}?(?:not found|does not exist)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def is_war_relevant(title: str | None, body: str | None) -> bool:
     """Cheap prefilter: no LLM tokens are spent on items that fail it (PLAN §11)."""
     blob = f"{title or ''} {body or ''}"
@@ -123,8 +175,11 @@ def estimate_tokens(text_body: str | None) -> int:
 def context_window() -> int:
     """Model context window, from the proxy's /models when it reports one.
 
-    Cached per process: the value cannot change without a proxy restart, and a failed lookup must
-    not add latency to every batch.
+    Cached per process once the proxy has answered: the value cannot change without a proxy
+    restart. A *failed* lookup is deliberately not cached — a worker whose first batch lands
+    mid-outage would otherwise lock in the fallback until the process recycles; the next batch
+    simply asks again (and during an outage every batch fails anyway, so the retry adds no
+    meaningful latency).
     """
     model = settings.litellm_model
     if model in _LIMITS_CACHE:
@@ -136,16 +191,18 @@ def context_window() -> int:
         try:
             with _client() as client:
                 resp = client.get(f"{base}/models")
-            if resp.status_code == 200:
-                for entry in resp.json().get("data", []):
-                    # LiteLLM reports the bare name; settings may carry a provider prefix.
-                    if entry.get("id") and model.endswith(entry["id"]):
-                        reported = entry.get("max_input_tokens") or entry.get("max_tokens")
-                        if reported:
-                            limit = min(int(reported), settings.llm_context_tokens)
-                        break
+            if resp.status_code != 200:
+                raise LLMTransient(f"proxy {resp.status_code} on /models")
+            for entry in resp.json().get("data", []):
+                # LiteLLM reports the bare name; settings may carry a provider prefix.
+                if entry.get("id") and model.endswith(entry["id"]):
+                    reported = entry.get("max_input_tokens") or entry.get("max_tokens")
+                    if reported:
+                        limit = min(int(reported), settings.llm_context_tokens)
+                    break
         except Exception as exc:
             log.info("could not read model limits from the proxy: %s", exc)
+            return limit
 
     _LIMITS_CACHE[model] = limit
     log.info("llm context window for %s: %d tokens", model, limit)
@@ -260,6 +317,24 @@ def summarize_batch(items: list[dict]) -> dict[int, dict]:
     return _indexed_results(data)
 
 
+def synthesize_batch(items: list[dict]) -> dict[int, dict]:
+    """Synthesize one merged report per clustered event (plans/SYNTHESIS.md §5).
+
+    items: [{idx, event_type, place, verdict, reports: [{source, perspective, tier, at, title,
+    summary, disputes?}], additional_reports}] ->
+    {idx: {"headline": ..., "summary": ..., "disagreements": ... | null}}.
+    """
+    if not items:
+        return {}
+    data = chat_json(
+        [
+            {"role": "system", "content": SYNTHESIS_PROMPT},
+            {"role": "user", "content": orjson.dumps(items).decode()},
+        ]
+    )
+    return _indexed_results(data)
+
+
 def fit_batch_for(items: list[dict], system_prompt: str) -> list[dict]:
     """Context-aware batch sizing against an arbitrary system prompt."""
     return fit_batch(items, system_prompt=system_prompt)
@@ -293,13 +368,28 @@ def _post(payload: dict) -> dict:
         raise LLMTransient(f"proxy {resp.status_code}: {resp.text[:200]}")
     if resp.status_code >= 400:
         bump_stat("llm_4xx")
+        # A 404 on /chat/completions is never about the payload, and the config spellings mean
+        # the request never reached a model. Capability rejections (response_format, reasoning
+        # switches) must stay hard LLMErrors so chat_json's degrade paths still fire.
+        if resp.status_code == 404 or _CONFIG_4XX_RE.search(resp.text or ""):
+            raise LLMTransient(f"proxy {resp.status_code} (config): {resp.text[:200]}")
         raise LLMError(f"proxy {resp.status_code}: {resp.text[:200]}")
     return resp.json()
 
 
+# A hanging backend costs LLM_TIMEOUT_S per attempt, and blind in-call retries would push the
+# task past Celery's soft time limit mid-attempt. New attempts therefore stop once this much wall
+# clock is spent: the budget leaves room for one final full-timeout attempt plus the task's own
+# error handling (releasing claims, committing) under the soft limit. Fast failures (connection
+# refused, 5xx) still get every attempt — they never come near the budget.
+_RETRY_DELAY_BUDGET_S = max(
+    30.0, settings.celery_task_soft_time_limit - settings.llm_timeout_s - 60.0
+)
+
+
 @retry(
     retry=retry_if_exception_type((LLMTransient, httpx.TransportError)),
-    stop=stop_after_attempt(settings.llm_max_retries),
+    stop=stop_after_attempt(settings.llm_max_retries) | stop_after_delay(_RETRY_DELAY_BUDGET_S),
     wait=wait_exponential(multiplier=2, min=2, max=30),
     reraise=True,
 )

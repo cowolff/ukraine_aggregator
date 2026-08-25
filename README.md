@@ -29,7 +29,10 @@ occupied area, which is what makes the disagreement band meaningful.
 a war-relevance regex, then run through an LLM that extracts event type, settlement names and any
 literal coordinates. Place names are resolved **only** against a local gazetteer of 32,000+
 settlements — there is no external geocoder, and an event with neither a gazetteer match nor
-explicit coordinates never gets a map position. That is the hallucination firewall.
+explicit coordinates never gets a map position. That is the hallucination firewall. The extractor
+also states which country each place is in: many settlement names exist on both sides of the
+border (Pokrovsk, Nikolske…), and a place located outside Ukraine is never gazetteer-matched —
+it stays a feed-only event instead of being pinned to its Ukrainian namesake.
 
 **Perspective labelling.** Every item carries `ukrainian` / `russian` / `western` / `neutral`, taken
 from the source record and never from the LLM, so it is deterministic and auditable.
@@ -43,6 +46,18 @@ to the top — and filtered by source quality, showing only tier-1 (most reliabl
 the reader widens it. Items the extraction model judges off-topic (world news riding along in a
 mixed feed) are dropped from the feed entirely — and skipped by translation and summarisation, so
 no tokens are spent on news nobody will see.
+
+**Synthesized reports when sources converge.** When several distinct sources report same-type
+events within ~3 km of each other inside a rolling day, the cluster becomes one pipeline-written
+report, pinned above the general news rail: an LLM merges the accounts and names their
+disagreements (casualty counts, attribution) instead of averaging them away, and a
+**code-derived credibility verdict** — `confirmed` / `corroborated` / `reported` / `unverified`,
+computed from the sources' reliability tiers and perspective classes, never by the model — tells
+the reader how much to believe it. A debunk joining the cluster caps the verdict and flags it
+disputed. Daily roundups are excluded from counting (two digests both naming a town are not two
+reports of one event), and one source posting five updates is one source. Every synthesis links
+its member reports; clicking it flies the map to the cluster. (`/api/synthesis`,
+plans/SYNTHESIS.md.)
 
 **Everything in English, originals one click away.** Headlines and snippets are translated by the
 same LiteLLM model that does extraction, stored alongside the untouched original. Every translated
@@ -170,7 +185,8 @@ Algorithm constants live in `app/config.py` and are all env-overridable:
 `GREY_MIN_PART_KM2` (0.5),
 `GAZETTEER_MIN_SIMILARITY` (0.55), `LLM_BATCH_SIZE` (8), `LLM_MAX_BODY_CHARS` (4000),
 `LLM_REASONING` (none), `LLM_CONCURRENCY` (4 — see `docker-compose.loadtest.yml`),
-`SNAPSHOT_SIMPLIFY_TOLERANCES`.
+`SNAPSHOT_SIMPLIFY_TOLERANCES`, and the synthesis knobs `SYNTH_JOIN_KM` (3), `SYNTH_MIN_SOURCES`
+(3), `SYNTH_WINDOW_HOURS` (24), `SYNTH_REFRESH_MIN_NEW` (3), `SYNTH_MAX_MEMBERS_IN_PROMPT` (12).
 
 **If your proxy model is not a reasoning model** with a small context window, set
 `LLM_REASONING=auto` and raise `LLM_CONTEXT_TOKENS`. Batches are sized to the real context window
@@ -184,6 +200,7 @@ automatically, so `LLM_BATCH_SIZE` is an upper bound rather than a fixed count.
 | `GET /api/frontline?detail=low\|mid\|high&at=ISO` | `{valid_at, built_at, layers:{ru, grey}, meta}`. `at` returns the newest snapshot valid at or before that instant |
 | `GET /api/events?bbox=&from=&to=&types=&perspectives=&limit=&zoom=&cluster=off` | GeoJSON; clusters above 500 matches unless `cluster=off`. Windowed on `occurred_at`, so backfilled history lands on the right date |
 | `GET /api/news?cursor=&perspective=&source_id=&q=&placement=&max_tier=&order=&from=&to=&limit=` | cursor-paginated. `placement=placed\|unplaced` splits by "has ≥1 visible event with a map position"; `max_tier` keeps sources at or above that reliability (1 = best); `from`/`to` window on `published_at`. Default order is ingest (`id`); `order=published` sorts by reporting time with an opaque keyset cursor |
+| `GET /api/synthesis?from=&to=&limit=` | cross-source synthesized reports, newest first, windowed on when their members were reported. Each carries the merged summary, the disagreements between accounts, the member sources, and a code-derived credibility verdict with its inputs (`plans/SYNTHESIS.md`) |
 | `GET /api/timeline` | scrubber bounds, the instants snapshots exist for, and events per day |
 | `GET /api/notifications` | active banners within their time window |
 | `GET /healthz` | db, redis, last build, pending extractions, degraded sources |

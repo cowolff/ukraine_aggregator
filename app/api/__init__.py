@@ -40,4 +40,4 @@ def bad_request(message: str):
     return json_response({"error": "bad_request", "detail": message}, status=400, max_age=0)
 
 
-from app.api import events, frontline, meta, news  # noqa: E402,F401  (register routes)
+from app.api import events, frontline, meta, news, synthesis  # noqa: E402,F401  (register routes)

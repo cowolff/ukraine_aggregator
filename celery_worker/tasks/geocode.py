@@ -30,9 +30,17 @@ def geocode_pending(limit: int = 200) -> dict:
         .scalars()
         .all()
     )
-    placed = ambiguous = unmatched = 0
+    placed = ambiguous = unmatched = foreign = 0
     for event in events:
-        oblast_hint = (event.llm_raw or {}).get("oblast") if event.llm_raw else None
+        raw = event.llm_raw or {}
+        country = raw.get("country")
+        if country and country != "ua":
+            # The gazetteer holds only Ukrainian settlements, and many names exist on both sides
+            # of the border (Pokrovsk, Nikolske...). A place the extractor located in another
+            # country must never name-match into Ukraine — it stays a feed-only event.
+            foreign += 1
+            continue
+        oblast_hint = raw.get("oblast")
         match = match_place(event.place_name_raw, oblast_hint)
         if match is None:
             unmatched += 1
@@ -66,5 +74,8 @@ def geocode_pending(limit: int = 200) -> dict:
     if placed:
         invalidate("api:events")
         invalidate("api:news")
-    log.info("geocoded placed=%d ambiguous=%d unmatched=%d", placed, ambiguous, unmatched)
-    return {"placed": placed, "ambiguous": ambiguous, "unmatched": unmatched}
+    log.info(
+        "geocoded placed=%d ambiguous=%d unmatched=%d foreign=%d",
+        placed, ambiguous, unmatched, foreign,
+    )
+    return {"placed": placed, "ambiguous": ambiguous, "unmatched": unmatched, "foreign": foreign}
