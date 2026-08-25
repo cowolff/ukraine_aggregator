@@ -34,10 +34,26 @@ explicit coordinates never gets a map position. That is the hallucination firewa
 **Perspective labelling.** Every item carries `ukrainian` / `russian` / `western` / `neutral`, taken
 from the source record and never from the LLM, so it is deterministic and auditable.
 
+**General news beside the map.** Reports with no clear location — overnight drone-count summaries,
+General Staff bulletins, frontline overviews the gazetteer can't pin down — never get a marker, so
+they appear in a collapsible feed on the right edge of the map instead (`/api/news?placement=unplaced`).
+Same rows as the Feed tab, same shortlist; the rail follows the time scrubber, so a past map shows
+the general news of that window. It is ordered by reporting time — backfilled history never floats
+to the top — and filtered by source quality, showing only tier-1 (most reliable) sources unless
+the reader widens it. Items the extraction model judges off-topic (world news riding along in a
+mixed feed) are dropped from the feed entirely — and skipped by translation and summarisation, so
+no tokens are spent on news nobody will see.
+
 **Everything in English, originals one click away.** Headlines and snippets are translated by the
 same LiteLLM model that does extraction, stored alongside the untouched original. Every translated
 item carries a small *original* button. English-language feeds are detected and skipped rather than
 round-tripped.
+
+**Summaries on every marker.** Items with a body beyond the headline get a short English summary
+from the same model, shown in the map popup. An item pinned to the map gets a summary focused on
+each of its places — one per distinct place name, shared by all markers at that settlement — so a
+multi-location report explains what is happening at *this* spot; general news gets a general
+summary. Summarising runs after extraction, so the summarised locations are exactly the map's.
 
 **A private shortlist.** Click ★ on any report to save it; saved spots turn yellow on the map and
 can be filtered to on their own, on both the map and the feed. The list lives in `localStorage` —
@@ -48,6 +64,13 @@ reporting it) and **beneficiary** (who the event favours — blue for Ukraine, r
 where neither or unassessed). The two often disagree, which is the interesting part: a cluster can
 be blue by perspective and red by beneficiary, meaning Ukrainian outlets reporting Russian gains.
 Verified geolocations claim no advantage and stay grey rather than being guessed at.
+
+**A shape per event type.** Deep strikes are starbursts, shelling filled circles, frontline
+advances filled triangles (claims hollow), geolocation proofs rings, debunks slashed circles.
+Shape says *what happened* while colour stays free to say *who* — so the map reads at a glance
+without clicking markers. The legend and type filters draw the same shapes; popups and feed chips
+keep the textual glyphs. When several reports share one spot, clicking the stack opens a single
+popup with ‹ › arrows to page through them, newest first.
 
 **Time travel.** The map scrubs back by hour and date. Every event carries `occurred_at` (when it
 was reported) as distinct from `created_at` (when we ingested it), and every frontline snapshot
@@ -125,7 +148,7 @@ dashboard before backfilling a large window.
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 docker compose up -d postgis redis
-.venv/bin/python -m pytest -q            # 189 tests; skips cleanly if the datastores are down
+.venv/bin/python -m pytest -q            # 297 tests; skips cleanly if the datastores are down
 ```
 
 ## Configuration
@@ -160,7 +183,7 @@ automatically, so `LLM_BATCH_SIZE` is an upper bound rather than a fixed count.
 | `GET /api/config` | poll interval, map defaults, event types, colours, glyphs |
 | `GET /api/frontline?detail=low\|mid\|high&at=ISO` | `{valid_at, built_at, layers:{ru, grey}, meta}`. `at` returns the newest snapshot valid at or before that instant |
 | `GET /api/events?bbox=&from=&to=&types=&perspectives=&limit=&zoom=&cluster=off` | GeoJSON; clusters above 500 matches unless `cluster=off`. Windowed on `occurred_at`, so backfilled history lands on the right date |
-| `GET /api/news?cursor=&perspective=&source_id=&q=&limit=` | newest-first, cursor-paginated |
+| `GET /api/news?cursor=&perspective=&source_id=&q=&placement=&max_tier=&order=&from=&to=&limit=` | cursor-paginated. `placement=placed\|unplaced` splits by "has ≥1 visible event with a map position"; `max_tier` keeps sources at or above that reliability (1 = best); `from`/`to` window on `published_at`. Default order is ingest (`id`); `order=published` sorts by reporting time with an opaque keyset cursor |
 | `GET /api/timeline` | scrubber bounds, the instants snapshots exist for, and events per day |
 | `GET /api/notifications` | active banners within their time window |
 | `GET /healthz` | db, redis, last build, pending extractions, degraded sources |
