@@ -53,6 +53,13 @@ def _claim(item_ids: list[int] | None) -> tuple[list[NewsItem], int]:
     skipped = 0
     candidates: list[NewsItem] = []
     for item, source_meta in rows:
+        # Judged off-topic → never shown in the feed, so translating it is pure token waste.
+        # Items extraction has not judged yet still translate right away (the stages run in
+        # parallel); only a settled "irrelevant" verdict retires the work.
+        if item.judged_irrelevant:
+            item.translation_status = "skipped"
+            skipped += 1
+            continue
         language = (source_meta or {}).get("language")
         if llm.needs_translation(item.title, item.body, language):
             candidates.append(item)

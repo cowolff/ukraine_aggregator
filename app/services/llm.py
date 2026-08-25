@@ -58,6 +58,20 @@ Rules:
 - Keep military abbreviations and unit designations as they are.
 - If an item is already in English, echo it back unchanged."""
 
+SUMMARY_PROMPT = """You summarise news items about the war in Ukraine for an English-language map UI.
+Respond with {"items": [...]} only, no prose.
+Per input item return one object:
+- "idx": the input index (integer, echo it back)
+- "summary": a 3-5 sentence general English summary of what the item reports
+- "locations": one entry per name in the item's input "locations" array — empty array when the
+  input array is empty: {"name": the location name echoed back EXACTLY as given,
+  "summary": 2-4 English sentences on what the item reports as happening at that specific place}
+Rules:
+- Always write English, whatever the language of the input.
+- Summarise only what the text itself says; never add outside knowledge, context or speculation.
+- A location summary is about that place alone; keep item-wide context in the general "summary".
+- Never invent, merge or drop locations: echo back exactly the names given, no more, no fewer."""
+
 _RELEVANCE_RE = re.compile("|".join(RELEVANCE_PATTERNS), re.IGNORECASE)
 _CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
@@ -198,16 +212,8 @@ def needs_translation(title: str | None, body: str | None, source_language: str 
     return "english" not in language
 
 
-def translate_batch(items: list[dict]) -> dict[int, dict]:
-    """Translate a batch. items: [{idx, title, body}] -> {idx: {"title":..., "body":...}}."""
-    if not items:
-        return {}
-    data = chat_json(
-        [
-            {"role": "system", "content": TRANSLATION_PROMPT},
-            {"role": "user", "content": orjson.dumps(items).decode()},
-        ]
-    )
+def _indexed_results(data: dict) -> dict[int, dict]:
+    """Re-key an {"items": [...]} completion by the echoed input index."""
     results = data.get("items")
     if not isinstance(results, list):
         raise LLMError(f"missing 'items' array: {str(data)[:200]}")
@@ -221,6 +227,37 @@ def translate_batch(items: list[dict]) -> dict[int, dict]:
             continue
         out[idx] = entry
     return out
+
+
+def translate_batch(items: list[dict]) -> dict[int, dict]:
+    """Translate a batch. items: [{idx, title, body}] -> {idx: {"title":..., "body":...}}."""
+    if not items:
+        return {}
+    data = chat_json(
+        [
+            {"role": "system", "content": TRANSLATION_PROMPT},
+            {"role": "user", "content": orjson.dumps(items).decode()},
+        ]
+    )
+    return _indexed_results(data)
+
+
+def summarize_batch(items: list[dict]) -> dict[int, dict]:
+    """Summarise a batch. items: [{idx, title, body, locations: [name, ...]}] ->
+    {idx: {"summary": ..., "locations": [{"name":..., "summary":...}, ...]}}.
+
+    Location summaries are requested once per distinct place *name*; the caller fans them out to
+    every map marker sharing that name, so an item with many co-located events costs one entry.
+    """
+    if not items:
+        return {}
+    data = chat_json(
+        [
+            {"role": "system", "content": SUMMARY_PROMPT},
+            {"role": "user", "content": orjson.dumps(items).decode()},
+        ]
+    )
+    return _indexed_results(data)
 
 
 def fit_batch_for(items: list[dict], system_prompt: str) -> list[dict]:
@@ -371,20 +408,7 @@ def extract_batch(items: list[dict]) -> dict[int, dict]:
     """Run one extraction batch and return ``{idx: item_result}``."""
     if not items:
         return {}
-    data = chat_json(build_messages(items))
-    results = data.get("items")
-    if not isinstance(results, list):
-        raise LLMError(f"missing 'items' array: {str(data)[:200]}")
-    out: dict[int, dict] = {}
-    for entry in results:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            idx = int(entry.get("idx"))
-        except (TypeError, ValueError):
-            continue
-        out[idx] = entry
-    return out
+    return _indexed_results(chat_json(build_messages(items)))
 
 
 def truncate(text_body: str | None) -> str:

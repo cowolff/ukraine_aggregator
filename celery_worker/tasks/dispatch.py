@@ -44,41 +44,63 @@ def dispatch_llm() -> dict:
               (SELECT count(*) FROM news_items
                 WHERE llm_status IN ('pending','failed') AND llm_attempts < 3) AS extract_pending,
               (SELECT count(*) FROM news_items
-                WHERE translation_status IN ('pending','failed')) AS translate_pending
+                WHERE translation_status IN ('pending','failed')) AS translate_pending,
+              -- Mirrors the summariser's claim gate: an item still waiting on extraction is not
+              -- claimable yet, so counting it would waste a slot on an empty batch.
+              (SELECT count(*) FROM news_items
+                WHERE summary_status IN ('pending','failed')
+                  AND llm_status NOT IN ('pending','processing')) AS summarize_pending
             """
         )
     ).mappings().first()
 
-    extract_pending = int(counts["extract_pending"])
-    translate_pending = int(counts["translate_pending"])
-    total = extract_pending + translate_pending
+    pending = {kind: int(counts[f"{kind}_pending"]) for kind in ("extract", "translate", "summarize")}
+    total = sum(pending.values())
     if total == 0:
         return {"queued": 0, "depth": depth, "reason": "nothing pending"}
 
-    # Split the free slots in proportion to what is waiting, but never starve a kind that has
-    # work: whichever is behind gets the bulk, the other still gets at least one slot.
-    extract_slots = round(room * extract_pending / total) if extract_pending else 0
-    translate_slots = room - extract_slots
-    if extract_pending and extract_slots == 0:
-        extract_slots, translate_slots = 1, max(0, translate_slots - 1)
-    if translate_pending and translate_slots == 0:
-        translate_slots, extract_slots = 1, max(0, extract_slots - 1)
+    slots = _split_slots(room, pending)
 
     from celery_worker.tasks.extract import llm_extract_batch
+    from celery_worker.tasks.summarize import summarize_batch
     from celery_worker.tasks.translate import translate_batch
 
-    for _ in range(extract_slots):
-        llm_extract_batch.apply_async(queue=LLM_QUEUE)
-    for _ in range(translate_slots):
-        translate_batch.apply_async(queue=LLM_QUEUE)
+    tasks = {"extract": llm_extract_batch, "translate": translate_batch,
+             "summarize": summarize_batch}
+    for kind, task in tasks.items():
+        for _ in range(slots[kind]):
+            task.apply_async(queue=LLM_QUEUE)
 
     result = {
-        "queued": extract_slots + translate_slots,
-        "extract": extract_slots,
-        "translate": translate_slots,
+        "queued": sum(slots.values()),
+        **slots,
         "depth_before": depth,
-        "extract_pending": extract_pending,
-        "translate_pending": translate_pending,
+        **{f"{kind}_pending": count for kind, count in pending.items()},
     }
     log.info("dispatch_llm %s", result)
     return result
+
+
+def _split_slots(room: int, pending: dict[str, int]) -> dict[str, int]:
+    """Split the free queue slots in proportion to what is waiting.
+
+    No kind that has work is ever starved: after the proportional split, each waiting kind with
+    zero slots takes one from the current largest allocation (when that donor can spare it).
+    """
+    total = sum(pending.values())
+    slots = {kind: room * count // total for kind, count in pending.items()}
+    # Hand out the flooring remainder, largest backlog first.
+    leftover = room - sum(slots.values())
+    for kind in sorted(pending, key=pending.get, reverse=True):
+        if leftover <= 0:
+            break
+        if pending[kind]:
+            slots[kind] += 1
+            leftover -= 1
+    for kind, count in pending.items():
+        if count and slots[kind] == 0:
+            donor = max(slots, key=slots.get)
+            if slots[donor] > 1:
+                slots[donor] -= 1
+                slots[kind] += 1
+    return slots

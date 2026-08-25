@@ -88,10 +88,21 @@ def maintenance() -> dict:
         {"mins": settings.llm_claim_stale_minutes},
     ).rowcount
 
+    summaries_released = db.session.execute(
+        text(
+            "UPDATE news_items SET summary_status = 'pending', summary_claimed_at = NULL "
+            "WHERE summary_status = 'processing' "
+            "  AND (summary_claimed_at IS NULL "
+            "       OR summary_claimed_at < now() - make_interval(mins => :mins))"
+        ),
+        {"mins": settings.llm_claim_stale_minutes},
+    ).rowcount
+
     db.session.commit()
     result = {
         "claims_released": released,
         "translations_released": translations_released,
+        "summaries_released": summaries_released,
         "snapshots_pruned": pruned,
         "upstream_pruned": upstream_pruned,
         "audit_pruned": audit_pruned,

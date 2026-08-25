@@ -27,6 +27,7 @@ class NewsItem(db.Model):
     __table_args__ = (
         CheckConstraint(f"llm_status IN {LLM_STATUSES!r}", name="llm_status"),
         CheckConstraint(f"translation_status IN {LLM_STATUSES!r}", name="translation_status"),
+        CheckConstraint(f"summary_status IN {LLM_STATUSES!r}", name="summary_status"),
         Index("ix_news_items_pending", "llm_status", postgresql_where=text("llm_status = 'pending'")),
         Index("ix_news_items_published_at", text("published_at DESC")),
         # Serves /api/news?order=published: reporting-time order with the id as keyset tiebreak.
@@ -50,6 +51,16 @@ class NewsItem(db.Model):
             "ix_news_items_translation_processing",
             "translation_claimed_at",
             postgresql_where=text("translation_status = 'processing'"),
+        ),
+        Index(
+            "ix_news_items_summary_pending",
+            text("id DESC"),
+            postgresql_where=text("summary_status IN ('pending', 'failed')"),
+        ),
+        Index(
+            "ix_news_items_summary_processing",
+            "summary_claimed_at",
+            postgresql_where=text("summary_status = 'processing'"),
         ),
     )
 
@@ -76,11 +87,28 @@ class NewsItem(db.Model):
         Text, nullable=False, server_default=text("'pending'")
     )
     translation_claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # General English summary of the item's content. Location-focused summaries live on the
+    # extracted events (one per distinct place name), with this as the fallback.
+    summary_en: Mapped[str | None] = mapped_column(Text)
+    summary_status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'pending'")
+    )
+    summary_claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     source = relationship("Source", lazy="joined")
     events = relationship(
         "ExtractedEvent", back_populates="news_item", cascade="all, delete-orphan", lazy="selectin"
     )
+
+    @property
+    def judged_irrelevant(self) -> bool:
+        """Extraction ran and wrote no events → off-topic for the war.
+
+        Extraction writes at least one event row — placed or not — for every item it judges
+        relevant (PLAN §11), so "judged, zero events" identifies wire-feed world news. Items the
+        LLM has not judged yet (pending/processing, or failed attempts) are not irrelevant.
+        """
+        return self.llm_status in ("done", "skipped") and not self.events
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<NewsItem {self.id} {(self.title or '')[:40]!r}>"

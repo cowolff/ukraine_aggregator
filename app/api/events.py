@@ -173,6 +173,9 @@ def _points(where: str, params: dict) -> list[dict]:
                    ST_X(e.geom) AS lon, ST_Y(e.geom) AS lat,
                    s.name AS source_name, s.perspective, s.reliability_tier,
                    n.title, n.title_en, n.url, n.published_at, e.created_at, e.occurred_at,
+                   -- The location-focused summary when the item names this spot; the item's
+                   -- general summary otherwise (single-location and coordinate-only events).
+                   COALESCE(e.summary_en, n.summary_en) AS summary,
                    (SELECT l.claim_id FROM evidence_links l
                      WHERE l.event_id = e.id AND l.active ORDER BY l.id LIMIT 1) AS claim_id,
                    (SELECT c.status FROM evidence_links l
@@ -201,6 +204,7 @@ def _points(where: str, params: dict) -> list[dict]:
                 "title": r["title_en"] or r["title"],
                 "title_original": r["title"],
                 "translated": bool(r["title_en"]) and r["title_en"] != r["title"],
+                "summary": r["summary"],
                 "url": r["url"],
                 "published_at": (r["published_at"] or r["occurred_at"]).isoformat(),
                 "occurred_at": r["occurred_at"].isoformat(),

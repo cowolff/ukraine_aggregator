@@ -18,6 +18,7 @@ celery = Celery(
         "celery_worker.tasks.poll",
         "celery_worker.tasks.extract",
         "celery_worker.tasks.translate",
+        "celery_worker.tasks.summarize",
         "celery_worker.tasks.dispatch",
         "celery_worker.tasks.geocode",
         "celery_worker.tasks.rules",

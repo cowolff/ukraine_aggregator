@@ -35,9 +35,12 @@ class TestNeedsTranslation:
 
 class TestTranslationBatch:
     def _item(self, source, title, body="текст", status="pending"):
+        # llm_status "pending": translation runs in parallel with extraction, so the normal case
+        # is an item not yet judged for relevance. (A judged item needs event rows to translate —
+        # see test_judged_irrelevant_items_are_retired.)
         item = NewsItem(
             source_id=source.id, content_hash=content_hash(title, body),
-            title=title, body=body, llm_status="done", translation_status=status,
+            title=title, body=body, llm_status="pending", translation_status=status,
         )
         db.session.add(item)
         db.session.commit()
@@ -99,6 +102,29 @@ class TestTranslationBatch:
         assert row.translation_status == "pending"
         assert row.translation_claimed_at is None, "a released claim carries no timestamp"
 
+    def test_judged_irrelevant_items_are_retired_without_calling_the_proxy(self, make_source,
+                                                                           monkeypatch):
+        """Extraction judged it off-topic (done, zero events) → the feed never shows it, so
+        translating it would be pure token waste."""
+        from celery_worker.tasks.translate import translate_batch
+
+        source = make_source("russian", meta={"language": "Russian"})
+        item = self._item(source, "Мировые новости не о войне")
+        db.session.execute(
+            text("UPDATE news_items SET llm_status='done' WHERE id=:i"), {"i": item.id}
+        )
+        db.session.commit()
+
+        def explode(_items):
+            raise AssertionError("an off-topic item must not reach the proxy")
+
+        monkeypatch.setattr(llm, "translate_batch", explode)
+        result = translate_batch()
+        assert result["skipped"] == 1
+        assert db.session.execute(
+            text("SELECT translation_status FROM news_items")
+        ).scalar() == "skipped"
+
     def test_concurrent_batches_do_not_claim_the_same_item(self, make_source, monkeypatch):
         from celery_worker.tasks.translate import _claim
 
@@ -120,7 +146,7 @@ class TestApiExposesTranslations:
             source_id=source.id, content_hash=content_hash("Обстріл", "текст"),
             title="Обстріл Покровська", body="Російські війська атакували місто",
             title_en="Shelling of Pokrovsk", body_en="Russian forces attacked the city",
-            llm_status="done", translation_status="done",
+            llm_status="pending", translation_status="done",
         )
         db.session.add(item)
         db.session.commit()
@@ -137,7 +163,7 @@ class TestApiExposesTranslations:
         db.session.add(
             NewsItem(
                 source_id=source.id, content_hash=content_hash("English headline", "body"),
-                title="English headline", body="body", llm_status="done",
+                title="English headline", body="body", llm_status="pending",
                 translation_status="skipped",
             )
         )

@@ -44,6 +44,8 @@ class TestLLMDispatcher:
                             lambda **kw: sent.append("extract"))
         monkeypatch.setattr("celery_worker.tasks.translate.translate_batch.apply_async",
                             lambda **kw: sent.append("translate"))
+        monkeypatch.setattr("celery_worker.tasks.summarize.summarize_batch.apply_async",
+                            lambda **kw: sent.append("summarize"))
 
         self._items(make_source("ukrainian"), 40)
         result = dispatch_llm()
@@ -59,6 +61,8 @@ class TestLLMDispatcher:
                             lambda **kw: sent.append("extract"))
         monkeypatch.setattr("celery_worker.tasks.translate.translate_batch.apply_async",
                             lambda **kw: sent.append("translate"))
+        monkeypatch.setattr("celery_worker.tasks.summarize.summarize_batch.apply_async",
+                            lambda **kw: sent.append("summarize"))
         monkeypatch.setattr("celery_worker.tasks.dispatch._queue_depth",
                             lambda: settings.llm_queue_target)
 
@@ -75,15 +79,20 @@ class TestLLMDispatcher:
                             lambda **kw: sent.append("extract"))
         monkeypatch.setattr("celery_worker.tasks.translate.translate_batch.apply_async",
                             lambda **kw: sent.append("translate"))
+        monkeypatch.setattr("celery_worker.tasks.summarize.summarize_batch.apply_async",
+                            lambda **kw: sent.append("summarize"))
 
         source = make_source("ukrainian")
-        # Lots waiting to translate, a little waiting to extract.
+        # Lots waiting to translate/summarise, a little waiting to extract. The two unextracted
+        # items must not count toward the summary backlog — they are not claimable yet.
         self._items(source, 40, llm_status="done", translation_status="pending")
         self._items(source, 2, llm_status="pending", translation_status="skipped")
 
-        dispatch_llm()
+        result = dispatch_llm()
         assert sent.count("translate") > sent.count("extract"), "capacity follows the backlog"
         assert sent.count("extract") >= 1, "the smaller queue is never starved entirely"
+        assert sent.count("summarize") >= 1, "extracted items are waiting on summaries"
+        assert result["summarize_pending"] == 40, "unextracted items are not summary-claimable"
 
     def test_no_work_means_no_tasks(self, queues, monkeypatch):
         from celery_worker.tasks.dispatch import dispatch_llm
@@ -93,6 +102,8 @@ class TestLLMDispatcher:
                             lambda **kw: sent.append("extract"))
         monkeypatch.setattr("celery_worker.tasks.translate.translate_batch.apply_async",
                             lambda **kw: sent.append("translate"))
+        monkeypatch.setattr("celery_worker.tasks.summarize.summarize_batch.apply_async",
+                            lambda **kw: sent.append("summarize"))
         assert dispatch_llm()["queued"] == 0
         assert sent == []
 
