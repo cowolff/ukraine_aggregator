@@ -46,10 +46,33 @@ class TestNormalisation:
             ("Kharkov region", "kharkiv"),
             ("nowhere-land", None),
             (None, None),
+            # Noun forms and Russian-derived exonyms the adjectival aliases can't reach.
+            ("Запорожье", "zaporizhzhia"),
+            ("Nikolaev", "mykolaiv"),
+            ("Chernigov", "chernihiv"),
+            # Spelling variants absorbed by the fuzzy fallback rather than enumerated.
+            ("Zaporizhia", "zaporizhzhia"),
+            ("Zaporizhye", "zaporizhzhia"),
+            ("Zaporizhzhya", "zaporizhzhia"),
+            ("Kharkiw", "kharkiv"),
+            ("Mykolayiv", "mykolaiv"),
+            ("East-Zaporizhzhia direction", "zaporizhzhia"),
+            # Fuzzy must not pull non-Ukrainian regions or generic words to a canon.
+            ("Moscow", None),
+            ("Belgorod", None),
+            ("Kursk", None),
+            ("direction", None),
         ],
     )
     def test_oblast_aliases(self, raw, expected):
         assert canonical_oblast(raw) == expected
+
+    def test_fuzzy_never_crosses_close_oblast_pairs(self):
+        # chernihiv and chernivtsi are each other's nearest alias neighbours; exact spellings
+        # must resolve to themselves and anything in between must stay None, never flip.
+        assert canonical_oblast("Chernihiv") == "chernihiv"
+        assert canonical_oblast("Chernivtsi") == "chernivtsi"
+        assert canonical_oblast("Chernihivtsi") in (None, "chernihiv")
 
 
 class TestCoordinateRegex:
@@ -168,3 +191,69 @@ class TestGazetteerMatching:
     def test_below_similarity_threshold_returns_none(self, gazetteer):
         # A near-miss word must not silently snap to a real settlement.
         assert match_place("Pokrovskoyeville") is None
+
+    def test_fallback_after_hint_miss_requires_near_exact(self, gazetteer):
+        # "Novoselivsky" fuzzy-scores ~0.69 against Novoselivka — placeable country-wide, but
+        # when a hinted oblast search came up empty only a near-exact hit may fall back. This is
+        # the "Holosiivskyi" bug: a Kyiv district snapping onto a like-named Donetsk village.
+        assert match_place("Novoselivsky") is not None
+        assert match_place("Novoselivsky", "Lviv") is None
+
+    def test_fallback_after_hint_miss_allows_exact_name(self, gazetteer):
+        # A wrong hint must not unplace a unique, exactly-named settlement.
+        match = match_place("Бахмут", "Луганська")
+        assert match is not None and match.oblast == "donetsk"
+
+    def test_unresolvable_hint_also_requires_near_exact(self, gazetteer):
+        # A hint the canonicalizer can't resolve is usually a FOREIGN region ("Eysky District");
+        # the extractor claimed to know where the place is, so a mere fuzzy country-wide hit
+        # must not place it ("Ейский район" once landed on Євбаз in Kyiv at 0.71).
+        assert match_place("Novoselivsky", "Eysky District") is None
+        # ...but an exactly-named settlement still survives a garbage hint.
+        match = match_place("Бахмут", "Nowhere Federal District")
+        assert match is not None and match.oblast == "donetsk"
+
+    def test_non_ukraine_places_stay_unplaced(self, gazetteer):
+        # Strike-origin reporting names Russian regions constantly; the gazetteer only holds
+        # Ukraine, so these must never fuzzy-match into it.
+        for name in ("Rostov region", "Бєлгород", "Брянск", "Engels", "Курськ", "Гомель"):
+            assert match_place(name) is None, name
+            assert match_place(name, "Kharkiv") is None, name
+
+    def test_match_reports_its_resolution_path(self, gazetteer):
+        assert match_place("Покровськ").resolution == "countrywide"
+        assert match_place("Новоселівка", "Донецька область").resolution == "hinted"
+        assert match_place("Бахмут", "Луганська").resolution == "fallback"
+
+
+class TestGeocodeTask:
+    def test_placement_records_resolution_metadata(self, gazetteer, make_source, make_event):
+        import json
+
+        from sqlalchemy import text
+
+        from app.extensions import db
+        from celery_worker.tasks.geocode import geocode_pending
+
+        event = make_event(make_source("western"), lat=None, lon=None)
+        db.session.execute(
+            text(
+                "UPDATE extracted_events SET place_name_raw='Покровськ', "
+                "llm_raw=CAST(:raw AS jsonb) WHERE id=:i"
+            ),
+            {"i": event.id, "raw": json.dumps({"oblast": "Donetsk"})},
+        )
+        db.session.commit()
+        stats = geocode_pending()
+        assert stats["placed"] >= 1
+        row = db.session.execute(
+            text(
+                "SELECT geo_meta->>'resolution' AS resolution, geo_meta->>'hint' AS hint, "
+                "(geo_meta->>'similarity')::float AS similarity "
+                "FROM extracted_events WHERE id=:i"
+            ),
+            {"i": event.id},
+        ).first()
+        assert row.resolution == "hinted"
+        assert row.hint == "Donetsk"
+        assert row.similarity == pytest.approx(1.0)

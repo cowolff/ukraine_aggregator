@@ -36,6 +36,12 @@ Per item fields:
 - "locations": array of {"name": string or null, "lat": number or null, "lon": number or null,
    "oblast": string or null} — extract EVERY named settlement; parse coordinates if literally
    present in the text; NEVER invent coordinates for a name.
+   * "oblast": the Ukrainian oblast the place is in, exactly one of: "donetsk","luhansk",
+     "zaporizhzhia","kherson","kharkiv","dnipropetrovsk","sumy","chernihiv","mykolaiv","odesa",
+     "kyiv","poltava","kirovohrad","cherkasy","vinnytsia","zhytomyr","rivne","volyn","lviv",
+     "ternopil","khmelnytskyi","chernivtsi","ivano-frankivsk","zakarpattia","crimea",
+     "sevastopol" — or null when unsure or the place is outside Ukraine. Use the article's
+     context (direction names, nearby settlements) to fill it in whenever possible.
 - "claimed_by": "ru","ua" or null — which side the reported gain/position favors
 - "debunk_target": string or null — for debunk items: the settlement/claim/URL being disputed
 - "confidence": 0..1 — your confidence in the extraction (not in the claim's truth)"""

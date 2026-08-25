@@ -1,0 +1,34 @@
+{% extends "base.html" %}{% block title %}Unplaced events{% endblock %}
+{% block body %}
+<h1>Unplaced events</h1>
+<p class="muted">Events the gazetteer matcher refused to place — unplaced beats wrong (PLAN §12).
+Assign a candidate to put the event on the map, or hide events that name nothing mappable.</p>
+<div class="scroll"><table>
+<tr><th>#</th><th>Type</th><th>Place (raw)</th><th>Oblast hint</th><th>News item</th>
+  <th>Candidates</th><th>Actions</th></tr>
+{% for r in rows %}
+<tr>
+  <td class="muted">{{ r.id }}</td>
+  <td><code>{{ r.event_type }}</code></td>
+  <td><b>{{ r.place_name_raw }}</b></td>
+  <td class="muted">{{ r.hint or '—' }}</td>
+  <td><a href="{{ url_for('admin.news_detail', item_id=r.news_id) }}">{{ (r.news_title or '(untitled)')|truncate(70) }}</a>
+    <br><span class="muted">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</span></td>
+  <td>
+    {% for c in suggestions.get(r.id, []) %}
+    <form method="post" action="{{ url_for('admin.event_assign', event_id=r.id, gazetteer_id=c['id']) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button title="similarity {{ '%.2f'|format(c['s']) }} · pop {{ c['pop'] or '?' }}">
+        {{ c['name_uk'] }} <span class="muted">({{ c['oblast'] or '?' }}{% if c['pop'] %}, {{ '{:,}'.format(c['pop']) }}{% endif %})</span>
+      </button>
+    </form>
+    {% else %}<span class="muted">no candidates</span>{% endfor %}
+  </td>
+  <td>
+    <form method="post" action="{{ url_for('admin.event_toggle', event_id=r.id) }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>hide</button></form>
+  </td>
+</tr>
+{% else %}<tr><td colspan="7" class="muted">Nothing waiting — every extracted event is placed or hidden.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

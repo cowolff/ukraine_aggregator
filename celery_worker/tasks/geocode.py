@@ -1,6 +1,8 @@
 """Gazetteer geocoding task (PLAN §12)."""
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select, text
 
 from app.extensions import db, log
@@ -42,9 +44,22 @@ def geocode_pending(limit: int = 200) -> dict:
         db.session.execute(
             text(
                 "UPDATE extracted_events SET geom = ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), "
-                "gazetteer_id = :gid, coord_source = 'gazetteer_match' WHERE id = :eid"
+                "gazetteer_id = :gid, coord_source = 'gazetteer_match', "
+                "geo_meta = CAST(:meta AS jsonb) WHERE id = :eid"
             ),
-            {"lon": match.lon, "lat": match.lat, "gid": match.gazetteer_id, "eid": event.id},
+            {
+                "lon": match.lon,
+                "lat": match.lat,
+                "gid": match.gazetteer_id,
+                "eid": event.id,
+                "meta": json.dumps(
+                    {
+                        "resolution": match.resolution,
+                        "similarity": round(match.similarity, 3),
+                        "hint": oblast_hint,
+                    }
+                ),
+            },
         )
         placed += 1
     db.session.commit()

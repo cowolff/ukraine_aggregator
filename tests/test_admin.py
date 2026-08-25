@@ -207,6 +207,47 @@ class TestNewsAndEvents:
         assert row.coord_source == "gazetteer_match"
         assert "event.relocate" in audit_actions()
 
+    def test_unplaced_queue_lists_events_with_candidates(self, client, make_source, make_event, gazetteer):
+        make_admin()
+        login(client)
+        event = make_event(make_source("western"), lat=None, lon=None)
+        db.session.execute(
+            text("UPDATE extracted_events SET place_name_raw='Покровськ' WHERE id=:i"),
+            {"i": event.id},
+        )
+        db.session.commit()
+        resp = client.get("/admin/unplaced")
+        assert resp.status_code == 200
+        page = resp.get_data(as_text=True)
+        assert "Покровськ" in page
+        assert f"/admin/events/{event.id}/assign/" in page, "candidate assign buttons expected"
+
+    def test_unplaced_assign_places_the_event(self, client, make_source, make_event, gazetteer):
+        make_admin()
+        login(client)
+        event = make_event(make_source("western"), lat=None, lon=None)
+        gid = gazetteer["Pokrovsk"][0]
+        client.post(f"/admin/events/{event.id}/assign/{gid}")
+        db.session.expire_all()
+        row = db.session.execute(
+            text(
+                "SELECT gazetteer_id, coord_source, geom IS NOT NULL AS placed, "
+                "geo_meta->>'resolution' AS resolution FROM extracted_events WHERE id=:i"
+            ),
+            {"i": event.id},
+        ).first()
+        assert row.placed and row.gazetteer_id == gid
+        assert row.coord_source == "gazetteer_match"
+        assert row.resolution == "manual"
+        assert "event.assign" in audit_actions()
+
+    def test_unplaced_assign_unknown_gazetteer_id_404s(self, client, make_source, make_event):
+        make_admin()
+        login(client)
+        event = make_event(make_source("western"), lat=None, lon=None)
+        resp = client.post(f"/admin/events/{event.id}/assign/999999")
+        assert resp.status_code == 404
+
     def test_relocate_rejects_non_numeric_input(self, client, make_source, make_event):
         make_admin()
         login(client)

@@ -45,8 +45,8 @@ FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "gazettee
 GEONAMES_URL = "https://download.geonames.org/export/dump/UA.zip"
 GEONAMES_ADMIN1_URL = "https://download.geonames.org/export/dump/admin1CodesASCII.txt"
 
-# GeoNames feature codes worth mapping. PPLX (section of a place) and the abandoned/historic
-# codes are kept out: they duplicate or misplace real settlements.
+# GeoNames feature codes worth mapping. Abandoned/historic codes are kept out: they duplicate
+# or misplace real settlements.
 # Alternate-name selection: how close a variant's transliteration must be to the ASCII name, and
 # how many to keep per settlement.
 VARIANT_MIN_RATIO = 0.5
@@ -54,7 +54,18 @@ VARIANT_LIMIT = 20
 
 PLACE_CODES = {
     "PPL", "PPLA", "PPLA2", "PPLA3", "PPLA4", "PPLA5", "PPLC", "PPLG", "PPLS", "PPLL", "PPLF",
+    # PPLX — a named section of a city (Saltivka, Troieshchyna, Pozniaky). Strike reports name
+    # these constantly; without them the matcher either drops the event or, worse, snaps it onto
+    # a like-named village elsewhere. They ship with population 0, so the population tie-break
+    # still prefers a real settlement of the same name.
+    "PPLX",
 }
+
+# GeoNames admin1 regions that ARE cities: their ADM2 rows are the official city districts
+# ("Holosiiv Raion", pop 202,993) rather than oblast raions, and news cite them daily
+# ("a 16-story building in Holosiivskyi district"). Other oblasts' ADM2 rows stay out —
+# raion-level centroids are too coarse to pin an event to.
+CITY_REGION_ADMIN1 = {"12", "20"}  # Kyiv City, Sevastopol City
 
 OVERPASS_ENDPOINTS = (
     "https://overpass-api.de/api/interpreter",
@@ -185,7 +196,11 @@ def geonames_places(force: bool = False) -> list[dict]:
         if len(fields) < len(GEONAMES_FIELDS):
             continue
         row = dict(zip(GEONAMES_FIELDS, fields))
-        if row["fclass"] != "P" or row["fcode"] not in PLACE_CODES:
+        is_settlement = row["fclass"] == "P" and row["fcode"] in PLACE_CODES
+        is_city_district = (
+            row["fclass"] == "A" and row["fcode"] == "ADM2" and row["admin1"] in CITY_REGION_ADMIN1
+        )
+        if not (is_settlement or is_city_district):
             continue
         try:
             lat, lon = float(row["lat"]), float(row["lon"])

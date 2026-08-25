@@ -306,6 +306,63 @@ def event_relocate(event_id: int):
     return redirect(url_for("admin.news_detail", item_id=event.news_item_id))
 
 
+@bp.get("/unplaced")
+@login_required
+def unplaced_list():
+    """Review queue for events the gazetteer matcher refused to place (PLAN §12: unplaced beats
+    wrong). Each row offers the matcher's best candidates for one-click assignment."""
+    from app.services.geocode import candidates, canonical_oblast, normalize
+
+    rows = db.session.execute(
+        text(
+            """
+            SELECT e.id, e.event_type, e.place_name_raw, e.created_at, e.occurred_at,
+                   e.llm_raw->>'oblast' AS hint, n.id AS news_id,
+                   coalesce(n.title_en, n.title) AS news_title
+            FROM extracted_events e JOIN news_items n ON n.id = e.news_item_id
+            WHERE e.geom IS NULL AND e.place_name_raw IS NOT NULL AND e.visible
+            ORDER BY e.id DESC LIMIT 50
+            """
+        )
+    ).mappings().all()
+    suggestions: dict[int, list[dict]] = {}
+    for row in rows:
+        query = normalize(row["place_name_raw"])
+        if len(query) < 3:
+            suggestions[row["id"]] = []
+            continue
+        hint = canonical_oblast(row["hint"])
+        ranked = candidates(query, limit=5, oblast=hint) if hint else []
+        seen = {c["id"] for c in ranked}
+        ranked += [c for c in candidates(query, limit=5) if c["id"] not in seen]
+        suggestions[row["id"]] = ranked[:5]
+    return render_template("unplaced.html", rows=rows, suggestions=suggestions)
+
+
+@bp.post("/events/<int:event_id>/assign/<int:gazetteer_id>")
+@login_required
+def event_assign(event_id: int, gazetteer_id: int):
+    event = db.session.get(ExtractedEvent, event_id) or abort(404)
+    updated = db.session.execute(
+        text(
+            "UPDATE extracted_events SET geom = g.geom, gazetteer_id = g.id, "
+            "coord_source = 'gazetteer_match', "
+            "geo_meta = jsonb_build_object('resolution', 'manual', 'hint', llm_raw->>'oblast') "
+            "FROM gazetteer g WHERE extracted_events.id = :eid AND g.id = :gid"
+        ),
+        {"eid": event_id, "gid": gazetteer_id},
+    )
+    if updated.rowcount != 1:
+        abort(404)
+    audit(current_actor(), "event.assign", entity="extracted_events", entity_id=str(event_id),
+          detail={"gazetteer_id": gazetteer_id})
+    db.session.commit()
+    _invalidate_public()
+    mark_frontline_dirty()
+    flash(f"Event {event_id} placed.", "ok")
+    return redirect(request.referrer or url_for("admin.unplaced_list"))
+
+
 # --------------------------------------------------------------------------------------------
 # 4. claims review
 # --------------------------------------------------------------------------------------------

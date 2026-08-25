@@ -91,6 +91,9 @@ class ExtractedEvent(db.Model):
     claimed_by: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
     llm_raw: Mapped[dict | None] = mapped_column(JSONType)
+    # How the point was placed: {"resolution": "hinted|countrywide|fallback|manual",
+    # "similarity": float, "hint": <raw LLM oblast>} — the audit trail for mislocation hunts.
+    geo_meta: Mapped[dict | None] = mapped_column(JSONType)
     visible: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     linked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[dt.datetime] = mapped_column(

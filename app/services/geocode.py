@@ -5,6 +5,7 @@ coordinates simply never gets a map position.
 """
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -23,24 +24,38 @@ _NOISE_TOKENS = {
     "муниципалитет", "поселок", "посёлок", "деревня", "город",
 }
 
-# Oblast aliases → canonical latin key used in the gazetteer's `oblast` column.
+# Oblast aliases → canonical latin key used in the gazetteer's `oblast` column. This list does
+# not try to enumerate every spelling — small variations ("Zaporizhia", "Kharkiw") are absorbed
+# by the fuzzy fallback in canonical_oblast. What must be listed are different *word forms* the
+# fuzzy match cannot bridge: adjectival vs noun (запорожская vs Запорожье) and the traditional
+# Russian-derived English exonyms (Nikolaev, Chernigov).
 OBLAST_ALIASES = {
     "donetsk": "donetsk", "донецька": "donetsk", "донецкая": "donetsk", "donetska": "donetsk",
+    "донецьк": "donetsk", "донецк": "donetsk",
     "luhansk": "luhansk", "лугансь": "luhansk", "луганская": "luhansk", "lugansk": "luhansk",
+    "луганськ": "luhansk", "луганск": "luhansk",
     "zaporizhzhia": "zaporizhzhia", "запорізька": "zaporizhzhia", "запорожская": "zaporizhzhia",
-    "kherson": "kherson", "херсонська": "kherson", "херсонская": "kherson",
+    "запоріжжя": "zaporizhzhia", "запорожье": "zaporizhzhia", "zaporozhye": "zaporizhzhia",
+    "kherson": "kherson", "херсонська": "kherson", "херсонская": "kherson", "херсон": "kherson",
     "kharkiv": "kharkiv", "харківська": "kharkiv", "харьковская": "kharkiv", "kharkov": "kharkiv",
+    "харків": "kharkiv", "харьков": "kharkiv",
     "dnipropetrovsk": "dnipropetrovsk", "дніпропетровська": "dnipropetrovsk",
+    "днепропетровск": "dnipropetrovsk", "dnepropetrovsk": "dnipropetrovsk",
     "sumy": "sumy", "сумська": "sumy", "сумская": "sumy",
-    "chernihiv": "chernihiv", "чернігівська": "chernihiv",
+    "chernihiv": "chernihiv", "чернігівська": "chernihiv", "чернігів": "chernihiv",
+    "чернигов": "chernihiv", "chernigov": "chernihiv",
     "mykolaiv": "mykolaiv", "миколаївська": "mykolaiv", "николаевская": "mykolaiv",
+    "миколаїв": "mykolaiv", "николаев": "mykolaiv", "nikolaev": "mykolaiv",
     "odesa": "odesa", "одеська": "odesa", "одесская": "odesa", "odessa": "odesa",
-    "kyiv": "kyiv", "київська": "kyiv", "киевская": "kyiv", "kiev": "kyiv",
+    "одеса": "odesa", "одесса": "odesa",
+    "kyiv": "kyiv", "київська": "kyiv", "киевская": "kyiv", "kiev": "kyiv", "київ": "kyiv",
     "crimea": "crimea", "крим": "crimea", "крым": "crimea", "ar krym": "crimea",
     "sevastopol": "sevastopol", "севастополь": "sevastopol",
     "poltava": "poltava", "полтавська": "poltava",
-    "kirovohrad": "kirovohrad", "cherkasy": "cherkasy", "vinnytsia": "vinnytsia",
-    "zhytomyr": "zhytomyr", "rivne": "rivne", "volyn": "volyn", "lviv": "lviv",
+    "kirovohrad": "kirovohrad", "kirovograd": "kirovohrad",
+    "cherkasy": "cherkasy", "vinnytsia": "vinnytsia", "vinnitsa": "vinnytsia",
+    "zhytomyr": "zhytomyr", "zhitomir": "zhytomyr",
+    "rivne": "rivne", "volyn": "volyn", "lviv": "lviv",
     "ternopil": "ternopil", "khmelnytskyi": "khmelnytskyi", "chernivtsi": "chernivtsi",
     "ivano-frankivsk": "ivano-frankivsk", "zakarpattia": "zakarpattia",
 }
@@ -73,17 +88,58 @@ def normalize(value: str | None) -> str:
     return " ".join(tokens).strip()
 
 
+# Alias lookup keyed by the same normalization applied to inputs, so Cyrillic aliases match
+# their own transliterations ("запорізька" and "zaporizka" are one entry, not two).
+_NORM_ALIASES: dict[str, str] = {}
+for _alias, _canon in OBLAST_ALIASES.items():
+    _norm = normalize(_alias)
+    if _norm:
+        _NORM_ALIASES.setdefault(_norm, _canon)
+
+# Fuzzy fallback: accept the closest alias when it is this similar to the input...
+FUZZY_OBLAST_MIN_RATIO = 0.75
+# ...and beats the best alias of any OTHER oblast by this margin. Guards the genuinely close
+# pairs — a garbled "Chernig..." that scores chernihiv 0.78 and chernivtsi 0.74 stays
+# unresolved rather than gambling on the wrong oblast.
+FUZZY_OBLAST_MARGIN = 0.08
+
+
+def _fuzzy_oblast(key: str) -> str | None:
+    scored = sorted(
+        ((difflib.SequenceMatcher(None, key, alias).ratio(), alias, canon)
+         for alias, canon in _NORM_ALIASES.items()),
+        reverse=True,
+    )
+    best_ratio, _, best_canon = scored[0]
+    if best_ratio < FUZZY_OBLAST_MIN_RATIO:
+        return None
+    runner_up = next((r for r, _, canon in scored if canon != best_canon), 0.0)
+    if best_ratio - runner_up < FUZZY_OBLAST_MARGIN:
+        return None
+    return best_canon
+
+
 def canonical_oblast(value: str | None) -> str | None:
+    """Map a free-form oblast mention to its canonical gazetteer key, or None.
+
+    Exact alias lookup first, then a fuzzy pass so the LLM's spelling of the moment
+    ("Zaporizhia", "Zaporizhzhya") still resolves instead of silently degrading the
+    downstream match to a country-wide search.
+    """
     if not value:
         return None
     key = normalize(value)
-    for token in (key, key.replace(" oblast", "").strip(), key.split()[0] if key else ""):
-        if token in OBLAST_ALIASES:
-            return OBLAST_ALIASES[token]
-    key_translit = transliterate(value.lower())
-    for alias, canon in OBLAST_ALIASES.items():
-        if alias in key_translit or canon in key_translit:
+    if not key:
+        return None
+    tokens = key.split()
+    for candidate in (key, *tokens):
+        if candidate in _NORM_ALIASES:
+            return _NORM_ALIASES[candidate]
+    for candidate in (key, *(t for t in tokens if len(t) >= 5 and t != key)):
+        canon = _fuzzy_oblast(candidate)
+        if canon:
             return canon
+    log.info("oblast hint %r did not canonicalize", value)
     return None
 
 
@@ -97,6 +153,43 @@ def name_search_value(*variants: str | None) -> str:
     return " ".join(seen)
 
 
+# Places outside Ukraine that war reporting names constantly (strike origins, targets of
+# Ukrainian deep strikes, political datelines). The gazetteer only holds Ukrainian settlements,
+# so without this guard these names fuzzy-match INTO Ukraine — an audit found Rostov placed in
+# Zakarpattia and Orel in Odesa. Keys are normalize()d, so Cyrillic forms fold into the same
+# entry. Events naming them simply stay unplaced.
+NON_UKRAINE_PLACES = frozenset(
+    normalize(name)
+    for name in (
+        # Russia — regions and cities that recur in strike reporting
+        "Russia", "Росія", "Россия", "Российская Федерация",
+        "Moscow", "Москва", "Moskva",
+        "Rostov", "Rostov-on-Don", "Ростов-на-Дону", "Taganrog", "Таганрог",
+        "Ростовская", "Ростовська",
+        "Belgorod", "Бєлгород", "Белгород", "Shebekino", "Шебекіно", "Шебекино",
+        "Белгородская", "Бєлгородська",
+        "Bryansk", "Брянськ", "Брянск", "Брянская", "Брянська",
+        "Kursk", "Курськ", "Курск", "Курская", "Курська",
+        "Voronezh", "Воронеж", "Воронежская", "Воронезька",
+        "Orel", "Oryol", "Орел", "Орёл", "Орловская", "Орловська",
+        "Lipetsk", "Липецьк", "Липецк", "Tula", "Тула", "Kaluga", "Калуга",
+        "Smolensk", "Смоленськ", "Смоленск", "Tver", "Твер", "Тверь",
+        "Ryazan", "Рязань", "Pskov", "Псков", "Novgorod", "Новгород",
+        "Krasnodar", "Краснодар", "Краснодарский", "Краснодарський",
+        "Novorossiysk", "Новоросійськ", "Новороссийск",
+        "Sochi", "Сочі", "Сочи", "Anapa", "Анапа",
+        "Yeysk", "Єйськ", "Ейск", "Ейский", "Єйський", "Eysky",
+        "Stavropol", "Ставрополь", "Volgograd", "Волгоград",
+        "Saratov", "Саратов", "Engels", "Енгельс", "Энгельс",
+        "Samara", "Самара", "Kazan", "Казань", "Tatarstan", "Татарстан",
+        "Astrakhan", "Астрахань", "Saint Petersburg", "Санкт-Петербург",
+        # Belarus
+        "Belarus", "Білорусь", "Беларусь", "Minsk", "Мінськ", "Минск",
+        "Gomel", "Homel", "Гомель", "Mazyr", "Мозир", "Мозырь", "Brest", "Брест",
+    )
+)
+
+
 @dataclass
 class Match:
     gazetteer_id: int
@@ -106,6 +199,9 @@ class Match:
     lat: float
     lon: float
     ambiguous: bool = False
+    # How the match was made: "hinted" (found inside the LLM's oblast), "countrywide" (no
+    # usable hint), or "fallback" (hinted search was empty; a near-exact country-wide hit).
+    resolution: str = "countrywide"
 
 
 # Population ratio above which the larger settlement wins outright instead of being reported as
@@ -115,6 +211,15 @@ POPULATION_DOMINANCE = 10.0
 
 # Scores within this window of the best are treated as equally good matches.
 SCORE_TIE_WINDOW = 0.05
+
+# When a *hinted* search found nothing and the country-wide fallback runs, only a near-exact
+# name hit may place the event. An empty hinted search means either the LLM's oblast was wrong
+# or the place isn't a gazetteer settlement at all (a city district, a street, a garbled name);
+# a fuzzy country-wide hit can't tell those apart and routinely snaps onto a like-named village
+# in the wrong oblast ("Holosiivskyi", a Kyiv district, scored 0.62 against Гольмівський on the
+# Donetsk frontline). Near-exact hits stay allowed so a merely-wrong hint doesn't unplace a
+# unique, well-known settlement.
+FALLBACK_MIN_SIMILARITY = 0.85
 
 
 def candidates(query: str, limit: int = 8, oblast: str | None = None) -> list[dict]:
@@ -154,11 +259,20 @@ def match_place(place_name: str | None, oblast_hint: str | None = None) -> Match
     query = normalize(place_name)
     if len(query) < 3:
         return None
+    if query in NON_UKRAINE_PLACES:
+        log.info("place %r is outside Ukraine — staying unplaced", place_name)
+        return None
 
     hint = canonical_oblast(oblast_hint)
+    hint_given = bool(oblast_hint and str(oblast_hint).strip())
+    fell_back = False
     rows = candidates(query, oblast=hint) if hint else []
     if not rows:
-        # No hint, or the hint matched nothing: fall back to a country-wide search.
+        # The country-wide fallback runs when there was no hint at all, when the hint didn't
+        # canonicalize (often a foreign region — "Eysky District"), or when the hinted search
+        # found nothing. In the latter two cases the extractor *claimed* to know the region and
+        # that knowledge couldn't be used, so only a near-exact hit may place the event.
+        fell_back = hint_given
         rows = candidates(query)
         hint = None
     if not rows:
@@ -166,6 +280,15 @@ def match_place(place_name: str | None, oblast_hint: str | None = None) -> Match
 
     top_score = float(rows[0]["s"] or 0)
     if top_score < settings.gazetteer_min_similarity:
+        return None
+    if fell_back and top_score < FALLBACK_MIN_SIMILARITY:
+        log.info(
+            "place %r: no match in hinted oblast %r and country-wide best %.2f is below the "
+            "fallback floor — staying unplaced",
+            place_name,
+            oblast_hint,
+            top_score,
+        )
         return None
 
     # word_similarity saturates at 1.0 for any exact variant hit, so several settlements routinely
@@ -200,4 +323,5 @@ def match_place(place_name: str | None, oblast_hint: str | None = None) -> Match
         lat=float(best["lat"]),
         lon=float(best["lon"]),
         ambiguous=ambiguous,
+        resolution="hinted" if hint else ("fallback" if fell_back else "countrywide"),
     )

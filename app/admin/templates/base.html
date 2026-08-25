@@ -68,6 +68,7 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--pa
     <a href="{{ url_for('admin.dashboard') }}" class="{{ 'active' if ep=='admin.dashboard' }}">Dashboard</a>
     <a href="{{ url_for('admin.sources_list') }}" class="{{ 'active' if ep and 'source' in ep }}">Sources</a>
     <a href="{{ url_for('admin.news_list') }}" class="{{ 'active' if ep and 'news' in ep }}">News &amp; events</a>
+    <a href="{{ url_for('admin.unplaced_list') }}" class="{{ 'active' if ep=='admin.unplaced_list' }}">Unplaced</a>
     <a href="{{ url_for('admin.claims_list') }}" class="{{ 'active' if ep and 'claim' in ep }}">Claims</a>
     <a href="{{ url_for('admin.notifications_list') }}" class="{{ 'active' if ep and 'notification' in ep }}">Notifications</a>
     <a href="{{ url_for('admin.blackouts_list') }}" class="{{ 'active' if ep and 'blackout' in ep }}">Blackouts</a>
