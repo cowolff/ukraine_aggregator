@@ -324,7 +324,8 @@ class TestEventsEndpoint:
 class TestNewsEndpoint:
     _seq = 0
 
-    def _items(self, source, count, *, placed_lat=None, placed_lon=None):
+    def _items(self, source, count, *, placed_lat=None, placed_lon=None,
+               unplaced_event=False, published_at=None, relevant=True, llm_status="done"):
         from app.models import ExtractedEvent, NewsItem, content_hash
 
         created = []
@@ -335,10 +336,15 @@ class TestNewsEndpoint:
                 source_id=source.id,
                 content_hash=content_hash(title, f"{source.id}-{i}-{TestNewsEndpoint._seq}"),
                 title=title, body=f"body {i}", url=f"https://example.test/{i}",
-                published_at=dt.datetime.now(dt.timezone.utc), llm_status="done",
+                published_at=published_at or dt.datetime.now(dt.timezone.utc),
+                llm_status=llm_status,
             )
             db.session.add(item)
             db.session.flush()
+            # Extraction writes at least one event row for every relevant item, so an extracted
+            # feed item with no explicit events still carries a bare relevance marker.
+            if relevant and llm_status == "done" and placed_lat is None and not unplaced_event:
+                db.session.add(ExtractedEvent(news_item_id=item.id, event_type="other"))
             if placed_lat is not None:
                 event = ExtractedEvent(
                     news_item_id=item.id, event_type="shelling",
@@ -353,6 +359,11 @@ class TestNewsEndpoint:
                     ),
                     {"lon": placed_lon, "lat": placed_lat, "i": event.id},
                 )
+            if unplaced_event:
+                db.session.add(ExtractedEvent(
+                    news_item_id=item.id, event_type="frontline_claim",
+                    place_name_raw="somewhere unresolvable", confidence=0.85,
+                ))
             created.append(item)
         db.session.commit()
         return created
@@ -430,6 +441,149 @@ class TestNewsEndpoint:
         )
         db.session.commit()
         assert client.get("/api/news").get_json()["items"] == []
+
+    # ---- placement filter (plans/NEWS_RAIL.md) ----
+
+    def _placement_corpus(self, make_source):
+        """One item of each shape: no events, unplaced-only, placed, mixed."""
+        source = make_source("ukrainian")
+        no_events = self._items(source, 1)[0]
+        unplaced_only = self._items(source, 1, unplaced_event=True)[0]
+        placed = self._items(source, 1, placed_lat=48.5, placed_lon=37.5)[0]
+        mixed = self._items(source, 1, placed_lat=48.6, placed_lon=37.6, unplaced_event=True)[0]
+        return no_events, unplaced_only, placed, mixed
+
+    def test_placement_partitions_the_corpus(self, client, make_source):
+        no_events, unplaced_only, placed, mixed = self._placement_corpus(make_source)
+
+        def ids(url):
+            return {i["id"] for i in client.get(url).get_json()["items"]}
+
+        assert ids("/api/news?placement=unplaced") == {no_events.id, unplaced_only.id}
+        assert ids("/api/news?placement=placed") == {placed.id, mixed.id}
+        assert ids("/api/news") == {no_events.id, unplaced_only.id, placed.id, mixed.id}
+
+    def test_judged_irrelevant_items_are_hidden_from_every_bucket(self, client, make_source):
+        """World news from a mixed feed: extraction judged it off-topic → zero event rows."""
+        source = make_source("western")
+        relevant = self._items(source, 1)[0]
+        irrelevant = self._items(source, 1, relevant=False)[0]
+        unjudged = self._items(source, 1, relevant=False, llm_status="pending")[0]
+
+        ids = {i["id"] for i in client.get("/api/news").get_json()["items"]}
+        assert relevant.id in ids
+        assert unjudged.id in ids, "not judged yet — visible until the verdict lands"
+        assert irrelevant.id not in ids
+        unplaced = {i["id"] for i in client.get("/api/news?placement=unplaced").get_json()["items"]}
+        assert irrelevant.id not in unplaced, "off-topic is not 'general news'"
+
+    def test_placement_and_window_bad_params_are_400(self, client):
+        assert client.get("/api/news?placement=martian").status_code == 400
+        assert client.get("/api/news?from=notadate").status_code == 400
+        assert client.get("/api/news?to=notadate").status_code == 400
+
+    def test_window_filters_on_published_at(self, client, make_source):
+        source = make_source("western")
+        old = self._items(
+            source, 1, published_at=dt.datetime(2025, 6, 1, tzinfo=dt.timezone.utc)
+        )[0]
+        new = self._items(source, 1)[0]
+
+        items = client.get("/api/news?to=2025-12-31T00:00:00Z").get_json()["items"]
+        assert [i["id"] for i in items] == [old.id]
+        items = client.get("/api/news?from=2026-01-01T00:00:00Z").get_json()["items"]
+        assert [i["id"] for i in items] == [new.id]
+        window = "/api/news?from=2025-01-01T00:00:00Z&to=2027-01-01T00:00:00Z"
+        assert {i["id"] for i in client.get(window).get_json()["items"]} == {old.id, new.id}
+
+    def test_blacked_out_placed_item_is_in_neither_placement_bucket(
+        self, client, app, make_source
+    ):
+        source = make_source("western")
+        self._items(source, 1, placed_lat=48.7, placed_lon=37.7)   # inside the zone
+        add_blackout(app)
+        from app.services.cache import invalidate
+
+        invalidate("api:news")
+        # It has a location, so it is not "general news" — but the blackout masks it from the
+        # placed bucket too. Masked, not reclassified.
+        assert client.get("/api/news?placement=placed").get_json()["items"] == []
+        assert client.get("/api/news?placement=unplaced").get_json()["items"] == []
+
+    def test_invisible_placed_event_does_not_place_its_item(self, client, make_source):
+        source = make_source("neutral")
+        item = self._items(source, 1, placed_lat=48.5, placed_lon=37.5)[0]
+        db.session.execute(
+            text("UPDATE extracted_events SET visible = false WHERE news_item_id = :i"),
+            {"i": item.id},
+        )
+        db.session.commit()
+        items = client.get("/api/news?placement=unplaced").get_json()["items"]
+        assert [i["id"] for i in items] == [item.id]
+
+    # ---- reporting-time order + source-quality filter (plans/NEWS_RAIL.md addendum) ----
+
+    @staticmethod
+    def _day(day):
+        return dt.datetime(2026, 8, day, 12, 0, tzinfo=dt.timezone.utc)
+
+    def test_published_order_sorts_by_reporting_time(self, client, make_source):
+        source = make_source("western")
+        mid = self._items(source, 1, published_at=self._day(20))[0]
+        new = self._items(source, 1, published_at=self._day(24))[0]
+        backfill = self._items(source, 1, published_at=self._day(1))[0]  # newest id, oldest date
+
+        by_id = [i["id"] for i in client.get("/api/news").get_json()["items"]]
+        assert by_id == [backfill.id, new.id, mid.id], "default contract unchanged"
+        by_time = [i["id"] for i in client.get("/api/news?order=published").get_json()["items"]]
+        assert by_time == [new.id, mid.id, backfill.id]
+
+    def test_published_order_keyset_pagination(self, client, make_source):
+        source = make_source("neutral")
+        created = [self._items(source, 1, published_at=self._day(d))[0] for d in (3, 1, 4, 4, 2)]
+        # Timestamp DESC, ties (the two day-4 items) broken by id DESC.
+        expected = [created[3].id, created[2].id, created[0].id, created[4].id, created[1].id]
+
+        seen, cursor = [], None
+        for _ in range(4):
+            url = "/api/news?order=published&limit=2" + (f"&cursor={cursor}" if cursor else "")
+            page = client.get(url).get_json()
+            seen += [i["id"] for i in page["items"]]
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+            assert "@" in str(cursor), "published-order cursor is a keyset pair"
+        assert seen == expected
+
+    def test_max_tier_filters_by_source_quality(self, client, make_source):
+        best = make_source("western", tier=1)
+        mid = make_source("western", tier=2)
+        worst = make_source("russian", tier=3)
+        a = self._items(best, 1)[0]
+        b = self._items(mid, 1)[0]
+        c = self._items(worst, 1)[0]
+
+        def ids(url):
+            return {i["id"] for i in client.get(url).get_json()["items"]}
+
+        assert ids("/api/news?max_tier=1") == {a.id}
+        assert ids("/api/news?max_tier=2") == {a.id, b.id}
+        assert ids("/api/news") == {a.id, b.id, c.id}
+
+    def test_order_and_tier_bad_params_are_400(self, client):
+        assert client.get("/api/news?order=martian").status_code == 400
+        assert client.get("/api/news?max_tier=abc").status_code == 400
+        assert client.get("/api/news?max_tier=0").status_code == 400
+        # A cursor of the wrong shape for the ordering must not be silently reinterpreted.
+        assert client.get("/api/news?order=published&cursor=123").status_code == 400
+        assert client.get("/api/news?cursor=123@2026-01-01T00:00:00Z").status_code == 400
+
+    def test_placement_requests_do_not_share_cache_entries(self, client, make_source):
+        self._placement_corpus(make_source)
+        assert len(client.get("/api/news").get_json()["items"]) == 4
+        assert len(client.get("/api/news?placement=unplaced").get_json()["items"]) == 2
+        # The unfiltered entry must still serve the full corpus after the filtered request.
+        assert len(client.get("/api/news").get_json()["items"]) == 4
 
 
 class TestNotificationsAndHealth:
