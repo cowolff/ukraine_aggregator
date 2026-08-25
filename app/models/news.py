@@ -29,6 +29,12 @@ class NewsItem(db.Model):
         CheckConstraint(f"translation_status IN {LLM_STATUSES!r}", name="translation_status"),
         Index("ix_news_items_pending", "llm_status", postgresql_where=text("llm_status = 'pending'")),
         Index("ix_news_items_published_at", text("published_at DESC")),
+        # Serves /api/news?order=published: reporting-time order with the id as keyset tiebreak.
+        Index(
+            "ix_news_items_effective_published",
+            text("COALESCE(published_at, fetched_at) DESC"),
+            text("id DESC"),
+        ),
         Index("ix_news_items_source_external", "source_id", "external_id"),
         Index(
             "ix_news_items_processing",
