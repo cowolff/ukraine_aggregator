@@ -158,7 +158,13 @@ def _status_for(failures: int) -> str:
 
 
 def ingest_items(source: Source, items: list[dict]) -> int:
-    """Insert new items, skipping duplicates by content hash (PLAN §7 UNIQUE constraint)."""
+    """Insert new items, skipping duplicates by content hash (PLAN §7 UNIQUE constraint).
+
+    An item whose external_id is already known to this source is an *edit* of a story we hold
+    (news sites republish with reworded titles/bodies; each edit hashes as "new"). Those update
+    the existing row in place and re-queue extraction/translation, so one story never carries
+    several sets of map markers.
+    """
     inserted = 0
     for item in items:
         title = (item.get("title") or "").strip() or None
@@ -170,6 +176,22 @@ def ingest_items(source: Source, items: list[dict]) -> int:
             select(NewsItem.id).where(NewsItem.content_hash == digest)
         ).scalar()
         if exists:
+            continue
+        external_id = item.get("external_id")
+        existing = None
+        if external_id:
+            existing = db.session.execute(
+                select(NewsItem).where(
+                    NewsItem.source_id == source.id, NewsItem.external_id == external_id
+                )
+            ).scalars().first()
+        if existing is not None:
+            try:
+                with db.session.begin_nested():
+                    _apply_story_update(existing, title, body, digest, item)
+                inserted += 1  # counts as ingest activity: caches must refresh
+            except Exception as exc:  # racing insert of the same content hash
+                log.debug("story update collision for %s: %s", digest[:12], exc)
             continue
         news = NewsItem(
             source_id=source.id,
@@ -191,3 +213,24 @@ def ingest_items(source: Source, items: list[dict]) -> int:
         except Exception as exc:  # concurrent insert of the same content hash
             log.debug("dedupe collision for %s: %s", digest[:12], exc)
     return inserted
+
+
+def _apply_story_update(existing: NewsItem, title, body, digest: str, item: dict) -> None:
+    """Fold an edited re-publish into the row we already hold and re-run the LLM stages."""
+    existing.title = title
+    existing.body = body
+    existing.content_hash = digest
+    existing.url = item.get("url") or existing.url
+    existing.published_at = item.get("published_at") or existing.published_at
+    # Stale extractions/translations describe text that no longer exists.
+    for event in list(existing.events):
+        db.session.delete(event)
+    existing.llm_status = "pending"
+    existing.llm_attempts = 0
+    existing.title_en = None
+    existing.body_en = None
+    existing.translation_status = "pending"
+    existing.summary_en = None
+    existing.summary_status = "pending"
+    db.session.flush()
+    log.info("story update: item=%s external_id=%s", existing.id, existing.external_id)

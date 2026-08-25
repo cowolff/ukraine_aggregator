@@ -69,6 +69,60 @@ class TestDedupe:
         db.session.commit()
         assert db.session.execute(text("SELECT llm_status FROM news_items")).scalar() == "pending"
 
+    def test_edited_republish_updates_the_story_in_place(self, make_source):
+        """A known external_id with new text is an edit — one story, one row, one set of events."""
+        source = make_source("ukrainian")
+        assert ingest_items(source, items(1)) == 1
+        db.session.commit()
+        item = db.session.execute(text("SELECT id FROM news_items")).first()
+        # Pretend the first version was fully processed: extracted + translated.
+        db.session.execute(
+            text(
+                "UPDATE news_items SET llm_status='done', translation_status='done', "
+                "title_en='old translation', summary_status='done', "
+                "summary_en='old summary' WHERE id=:i"
+            ),
+            {"i": item.id},
+        )
+        db.session.execute(
+            text(
+                "INSERT INTO extracted_events (news_item_id, event_type, place_name_raw, "
+                "occurred_at) VALUES (:i, 'shelling', 'Somewhere', now())"
+            ),
+            {"i": item.id},
+        )
+        db.session.commit()
+
+        edited = [dict(items(1)[0], title="item 0 (corrected)", body="rewritten body")]
+        assert ingest_items(source, edited) == 1
+        db.session.commit()
+
+        assert count_news() == 1
+        row = db.session.execute(
+            text(
+                "SELECT title, llm_status, translation_status, title_en, "
+                "summary_status, summary_en, "
+                "(SELECT count(*) FROM extracted_events e WHERE e.news_item_id = n.id) AS events "
+                "FROM news_items n WHERE id=:i"
+            ),
+            {"i": item.id},
+        ).first()
+        assert row.title == "item 0 (corrected)"
+        assert row.llm_status == "pending" and row.translation_status == "pending"
+        assert row.title_en is None
+        assert row.summary_status == "pending" and row.summary_en is None, \
+            "a stale summary describes text that no longer exists"
+        assert row.events == 0, "stale events from the previous version must not survive"
+
+    def test_same_external_id_from_another_source_is_still_a_new_item(self, make_source):
+        first, second = make_source("ukrainian"), make_source("neutral")
+        assert ingest_items(first, items(1)) == 1
+        db.session.commit()
+        other = [dict(items(1)[0], title="different headline", body="different body")]
+        assert ingest_items(second, other) == 1
+        db.session.commit()
+        assert count_news() == 2
+
 
 class TestPollSource:
     def test_successful_poll_ingests_and_marks_ok(self, make_source, monkeypatch):
