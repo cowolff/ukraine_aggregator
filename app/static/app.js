@@ -28,6 +28,7 @@ const State = {
   railLoading: false,
   railExhausted: false,
   railTier: 1,          // max reliability tier shown; 1 = most reliable only (the default)
+  syntheses: [],        // current /api/synthesis items, threaded into the feed and the rail
   timer: null,
   // --- time travel ---
   timeline: null,       // {from, to, snapshots: [ISO], events_per_day: [...]}
@@ -1012,6 +1013,7 @@ async function loadFeed({reset = false} = {}) {
     for (const item of data.items || []) $('feed').append(feedRow(item));
     State.feedCursor = data.next_cursor;
     State.feedExhausted = !data.next_cursor;
+    placeSyntheses();     // the new page may anchor syntheses below the previous horizon
     $('feed-end').textContent = $('feed').children.length === 0
       ? 'Nothing ingested yet for this filter.'
       : (State.feedExhausted ? 'End of feed.' : 'Scroll for more…');
@@ -1191,6 +1193,7 @@ async function loadRail({reset = false} = {}) {
     for (const item of data.items || []) $('rail-feed').append(feedRow(item, {rail: true}));
     State.railCursor = data.next_cursor;
     State.railExhausted = !data.next_cursor;
+    placeSyntheses();     // the new page may anchor syntheses below the previous horizon
     $('rail-end').textContent = $('rail-feed').children.length === 0
       ? 'Nothing at this source quality for this window.'
       : (State.railExhausted ? 'End.' : 'Scroll for more…');
@@ -1221,15 +1224,17 @@ async function refreshRail() {
     const fresh = (data.items || []).filter((item) =>
       !have.has(String(item.id)) && new Date(item.published_at).getTime() >= topTime);
     for (const item of fresh.reverse()) list.prepend(feedRow(item, {rail: true}));
+    placeSyntheses();
   } catch { /* transient; the next tick retries */ }
 }
 
 /* ------------------------------------------------------------------ synthesized reports
-   Cross-source syntheses pinned above the rail (plans/SYNTHESIS.md): the pipeline's own words,
-   visually distinct from source reporting. The credibility badge is code-derived — the tooltip
-   shows its inputs. The block ignores the rail tier filter on purpose: the verdict already
+   Cross-source syntheses (plans/SYNTHESIS.md), threaded into the rail and the Feed tab at
+   their place in the timeline — tinted rows among the source reporting, keyed on the time of
+   the story they merge (last member report). The credibility badge is code-derived — the
+   tooltip shows its inputs. They ignore the rail tier filter on purpose: the verdict already
    encodes tier, and hiding an "unverified" warning from a tier-1 reader defeats the point. */
-const SYNTH_PAGE = 10;
+const SYNTH_PAGE = 20;
 
 function synthVerdict(cred) {
   switch (cred.verdict) {
@@ -1271,6 +1276,9 @@ function synthesisURL() {
 function synthRow(item) {
   const li = document.createElement('li');
   li.className = `synth v-${escapeHTML(item.credibility.verdict || 'unverified')}`;
+  li.dataset.synthId = item.id;
+  // The timeline key: the last member report is when this story "happened" in the feed's terms.
+  li.dataset.publishedAt = item.last_reported_at || '';
   const verdict = synthVerdict(item.credibility);
   const glyph = (State.config?.glyphs || {})[item.event_type] || '·';
   const typeLabel = String(item.event_type || '').replace(/_/g, ' ');
@@ -1287,6 +1295,8 @@ function synthRow(item) {
   }).join('');
   li.innerHTML = `
     <div class="synth-head">
+      <span class="chip synth-chip" title="Written by the pipeline from the reports below —
+        not a source's own words">synthesized</span>
       <span class="synth-badge" title="${escapeHTML(synthTooltip(item.credibility))}">
         ${verdict.glyph} ${escapeHTML(verdict.label)}</span>
       ${item.credibility.disputed ? '<span class="synth-disputed">⚠ disputed</span>' : ''}
@@ -1319,15 +1329,41 @@ function synthRow(item) {
   return li;
 }
 
+/* Thread the current syntheses into a list at their chronological spot: each goes right
+   before the first row older than it. Feed rows carry data-published-at, so the rail
+   (published order) places exactly; the Feed tab (ingest order, roughly chronological live)
+   places at the sensible spot. A synthesis older than everything loaded so far is *not*
+   appended while more pages remain — it belongs below the loaded horizon, and the next page
+   will anchor it. */
+function placeSyntheses() {
+  const feedFiltered = State.feedSavedOnly
+    || $('feed-q').value.trim() !== '' || $('feed-perspective').value !== '';
+  const targets = [{list: $('rail-feed'), exhausted: State.railExhausted}];
+  // A filtered feed is the reader asking for specific reporting; cross-source syntheses match
+  // neither a search term nor a single perspective, so they step aside there.
+  if (!feedFiltered) targets.push({list: $('feed'), exhausted: State.feedExhausted});
+  for (const {list, exhausted} of targets) {
+    for (const item of State.syntheses) {
+      if (list.querySelector(`[data-synth-id="${item.id}"]`)) continue;
+      const ts = new Date(item.last_reported_at || 0).getTime();
+      const anchor = Array.from(list.children).find((li) =>
+        new Date(li.dataset.publishedAt || 0).getTime() < ts);
+      if (anchor) list.insertBefore(synthRow(item), anchor);
+      else if (exhausted) list.append(synthRow(item));
+    }
+  }
+}
+
+/* One fetch feeds both lists. On change, existing synth rows are dropped and re-placed so a
+   re-synthesized report shows its new text (and moves if its story time advanced). */
 async function loadSynthesis({poll = false} = {}) {
   try {
     const {data, unchanged} = await getJSON(synthesisURL(), {useEtag: poll});
     if (poll && (unchanged || !data)) return;
-    const list = $('synth-list');
-    list.innerHTML = '';
-    for (const item of (data.items || [])) list.append(synthRow(item));
-    $('synth-block').hidden = list.children.length === 0;
-  } catch { /* transient; the block keeps its last content and the next tick retries */ }
+    State.syntheses = data.items || [];
+    for (const li of document.querySelectorAll('li.synth')) li.remove();
+    placeSyntheses();
+  } catch { /* transient; the placed rows stay and the next tick retries */ }
 }
 
 function showOnMap(event, item) {
@@ -1621,6 +1657,8 @@ async function boot() {
     const button = $('feed-saved-only');
     button.classList.toggle('active', State.feedSavedOnly);
     button.textContent = State.feedSavedOnly ? `★ Saved (${Saved.size})` : '☆ Saved';
+    // The shortlist is the reader's own list; renderSavedFeed rebuilds #feed without the
+    // syntheses, and leaving the view re-places them via loadFeed → placeSyntheses.
     loadFeed({reset: true});
   });
 

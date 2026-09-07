@@ -49,7 +49,7 @@ no tokens are spent on news nobody will see.
 
 **Synthesized reports when sources converge.** When several distinct sources report same-type
 events within ~3 km of each other inside a rolling day, the cluster becomes one pipeline-written
-report, pinned above the general news rail: an LLM merges the accounts and names their
+report, threaded into the general news rail and the Feed tab at its place in the timeline: an LLM merges the accounts and names their
 disagreements (casualty counts, attribution) instead of averaging them away, and a
 **code-derived credibility verdict** — `confirmed` / `corroborated` / `reported` / `unverified`,
 computed from the sources' reliability tiers and perspective classes, never by the model — tells

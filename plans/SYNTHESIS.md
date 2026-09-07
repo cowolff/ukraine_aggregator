@@ -11,6 +11,12 @@ measurements. As-built deltas from the sketch below, all minor:
 - The dispatcher's fourth kind is named `synthesize_reports` (task
   `tasks.synthesize_reports_batch`); the clustering beat task is `tasks.cluster_synthesis`,
   offset 90 s from `evaluate_claims`.
+- Not a pinned block (§7 as sketched): syntheses are **threaded into the timeline** of both the
+  general news rail and the Feed tab, as tinted rows keyed on `last_reported_at` — each inserted
+  before the first older row, exact in the rail (published order), best-effort in the ingest-
+  ordered feed. One fetch feeds both lists. They step aside when the feed is filtered (search,
+  perspective, ★ shortlist) — a cross-source synthesis matches neither a search term nor a
+  single perspective.
 
 ## 1. Goal
 
